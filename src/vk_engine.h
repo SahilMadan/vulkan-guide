@@ -5,25 +5,60 @@
 
 #include <vk_types.h>
 
+#include <vector>
+
 class VulkanEngine {
-public:
+ public:
+  bool is_initialized_{false};
+  int framenumber_{0};
 
-	bool _isInitialized{ false };
-	int _frameNumber {0};
+  VkExtent2D window_extent_{1700, 900};
 
-	VkExtent2D _windowExtent{ 1700 , 900 };
+  struct SDL_Window* window_{nullptr};
 
-	struct SDL_Window* _window{ nullptr };
+  // initializes everything in the engine
+  void Init();
 
-	//initializes everything in the engine
-	void init();
+  // shuts down the engine
+  void Cleanup();
 
-	//shuts down the engine
-	void cleanup();
+  // draw loop
+  void Draw();
 
-	//draw loop
-	void draw();
+  // run main loop
+  void Run();
 
-	//run main loop
-	void run();
+ private:
+  VkInstance instance_;
+  VkDebugUtilsMessengerEXT debug_messenger_;
+  VkPhysicalDevice gpu_;
+  VkDevice device_;
+  VkSurfaceKHR surface_;
+
+  VkSwapchainKHR swapchain_;
+  VkFormat swapchain_image_format_;
+  std::vector<VkImage> swapchain_images_;
+  std::vector<VkImageView> swapchain_image_views_;
+
+  VkQueue graphics_queue_;
+  uint32_t graphics_queue_family_;
+  VkCommandPool command_pool_;
+  VkCommandBuffer command_buffer_;
+
+  VkRenderPass renderpass_;
+  std::vector<VkFramebuffer> framebuffers_;
+
+  // Semaphores used for GPU <-> GPU sync.
+  VkSemaphore present_semaphore_;
+  VkSemaphore render_semaphore_;
+  // Fence used for CPU <-> GPU sync.
+  VkFence render_fence_;
+
+  // Initialization Helpers.
+  void InitVulkan();
+  void InitSwapchain();
+  void InitCommands();
+  void InitDefaultRenderpass();
+  void InitFramebuffers();
+  void InitSyncStructs();
 };
