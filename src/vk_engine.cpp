@@ -97,6 +97,15 @@ void VulkanEngine::InitSwapchain() {
   swapchain_images_ = vkb_swapchain.get_images().value();
   swapchain_image_views_ = vkb_swapchain.get_image_views().value();
   swapchain_image_format_ = vkb_swapchain.image_format;
+
+  deletion_queue_.Push([=]() {
+    vkDestroySwapchainKHR(device_, swapchain_, nullptr);
+    for (int i = 0; i < swapchain_image_views_.size(); i++) {
+      vkDestroyFramebuffer(device_, framebuffers_[i], nullptr);
+
+      vkDestroyImageView(device_, swapchain_image_views_[i], nullptr);
+    }
+  });
 }
 
 void VulkanEngine::InitCommands() {
@@ -107,6 +116,11 @@ void VulkanEngine::InitCommands() {
 
   VK_CHECK(vkCreateCommandPool(device_, &command_pool_info, nullptr,
                                &command_pool_));
+
+  deletion_queue_.Push([=]() {
+    // This will also destroy all allocated command buffers.
+    vkDestroyCommandPool(device_, command_pool_, nullptr);
+  });
 
   // Alloate the default command buffer that we will use for rendering.
   VkCommandBufferAllocateInfo command_buffer_allocate_info =
@@ -161,6 +175,9 @@ void VulkanEngine::InitDefaultRenderpass() {
 
   VK_CHECK(
       vkCreateRenderPass(device_, &renderpass_info, nullptr, &renderpass_));
+
+  deletion_queue_.Push(
+      [=]() { vkDestroyRenderPass(device_, renderpass_, nullptr); });
 }
 
 void VulkanEngine::InitFramebuffers() {
@@ -197,6 +214,9 @@ void VulkanEngine::InitSyncStructs() {
 
   VK_CHECK(vkCreateFence(device_, &fence_info, nullptr, &render_fence_));
 
+  deletion_queue_.Push(
+      [=]() { vkDestroyFence(device_, render_fence_, nullptr); });
+
   VkSemaphoreCreateInfo semaphore_info = {};
   semaphore_info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
   semaphore_info.pNext = nullptr;
@@ -205,8 +225,13 @@ void VulkanEngine::InitSyncStructs() {
 
   VK_CHECK(vkCreateSemaphore(device_, &semaphore_info, nullptr,
                              &present_semaphore_));
+  deletion_queue_.Push(
+      [=]() { vkDestroySemaphore(device_, present_semaphore_, nullptr); });
+
   VK_CHECK(
       vkCreateSemaphore(device_, &semaphore_info, nullptr, &render_semaphore_));
+  deletion_queue_.Push(
+      [=]() { vkDestroySemaphore(device_, render_semaphore_, nullptr); });
 }
 
 void VulkanEngine::InitPipelines() {
@@ -230,6 +255,10 @@ void VulkanEngine::InitPipelines() {
       vkinit::PipelineLayoutCreateInfo();
   VK_CHECK(vkCreatePipelineLayout(device_, &pipeline_layout_info, nullptr,
                                   &triangle_pipeline_layout_));
+
+  deletion_queue_.Push([=]() {
+    vkDestroyPipelineLayout(device_, triangle_pipeline_layout_, nullptr);
+  });
 
   PipelineBuilder builder;
 
@@ -266,6 +295,8 @@ void VulkanEngine::InitPipelines() {
 
   triangle_pipeline_ = builder.BuildPipeline(device_, renderpass_);
 
+  deletion_queue_.Push(
+      [=]() { vkDestroyPipeline(device_, triangle_pipeline_, nullptr); });
   vkDestroyShaderModule(device_, triangle_vert_shader.value(), nullptr);
   vkDestroyShaderModule(device_, triangle_frag_shader.value(), nullptr);
 
@@ -293,6 +324,9 @@ void VulkanEngine::InitPipelines() {
 
   colored_triangle_pipeline_ = builder.BuildPipeline(device_, renderpass_);
 
+  deletion_queue_.Push([=]() {
+    vkDestroyPipeline(device_, colored_triangle_pipeline_, nullptr);
+  });
   vkDestroyShaderModule(device_, colored_triangle_vert_shader.value(), nullptr);
   vkDestroyShaderModule(device_, colored_triangle_frag_shader.value(), nullptr);
 }
@@ -338,26 +372,8 @@ void VulkanEngine::Cleanup() {
     // Wait for VkCommandBuffer to finish before destroying render pass.
     VK_CHECK(
         vkWaitForFences(device_, 1, &render_fence_, true, kSyncWaitTimeoutNs));
-    VK_CHECK(vkResetFences(device_, 1, &render_fence_));
 
-    vkDestroyPipeline(device_, triangle_pipeline_, nullptr);
-    vkDestroyPipelineLayout(device_, triangle_pipeline_layout_, nullptr);
-
-    vkDestroyFence(device_, render_fence_, nullptr);
-    vkDestroySemaphore(device_, render_semaphore_, nullptr);
-    vkDestroySemaphore(device_, present_semaphore_, nullptr);
-
-    vkDestroyRenderPass(device_, renderpass_, nullptr);
-
-    // This will also destroy all allocated command buffers.
-    vkDestroyCommandPool(device_, command_pool_, nullptr);
-
-    vkDestroySwapchainKHR(device_, swapchain_, nullptr);
-    for (int i = 0; i < swapchain_image_views_.size(); i++) {
-      vkDestroyFramebuffer(device_, framebuffers_[i], nullptr);
-
-      vkDestroyImageView(device_, swapchain_image_views_[i], nullptr);
-    }
+    deletion_queue_.Flush();
 
     vkDestroyDevice(device_, nullptr);
     vkDestroySurfaceKHR(instance_, surface_, nullptr);

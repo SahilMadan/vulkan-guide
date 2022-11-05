@@ -5,6 +5,7 @@
 
 #include <vk_types.h>
 
+#include <deletion_queue.hpp>
 #include <optional>
 #include <string>
 #include <vector>
@@ -76,6 +77,9 @@ class VulkanEngine {
   VkPipeline colored_triangle_pipeline_;
 
   int selected_shader_ = 0;
+
+  DeletionQueue deletion_queue_;
+
   // Initialization Helpers.
   void InitVulkan();
   void InitSwapchain();
