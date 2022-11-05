@@ -5,6 +5,8 @@
 
 #include <vk_types.h>
 
+#include <optional>
+#include <string>
 #include <vector>
 
 class VulkanEngine {
@@ -29,6 +31,20 @@ class VulkanEngine {
   void Run();
 
  private:
+  struct PipelineBuilder {
+    std::vector<VkPipelineShaderStageCreateInfo> shader_stages;
+    VkPipelineVertexInputStateCreateInfo vertex_input_info;
+    VkPipelineInputAssemblyStateCreateInfo input_assembly;
+    VkViewport viewport;
+    VkRect2D scissor;
+    VkPipelineRasterizationStateCreateInfo rasterizer;
+    VkPipelineColorBlendAttachmentState color_blend_attachment;
+    VkPipelineMultisampleStateCreateInfo multisampling;
+    VkPipelineLayout pipeline_layout;
+
+    VkPipeline BuildPipeline(VkDevice device, VkRenderPass renderpass);
+  };
+
   VkInstance instance_;
   VkDebugUtilsMessengerEXT debug_messenger_;
   VkPhysicalDevice gpu_;
@@ -54,6 +70,10 @@ class VulkanEngine {
   // Fence used for CPU <-> GPU sync.
   VkFence render_fence_;
 
+  VkPipelineLayout triangle_pipeline_layout_;
+
+  VkPipeline triangle_pipeline_;
+
   // Initialization Helpers.
   void InitVulkan();
   void InitSwapchain();
@@ -61,4 +81,7 @@ class VulkanEngine {
   void InitDefaultRenderpass();
   void InitFramebuffers();
   void InitSyncStructs();
+  void InitPipelines();
+
+  std::optional<VkShaderModule> LoadShaderModule(const std::string& path);
 };
