@@ -73,7 +73,9 @@ class VulkanEngine {
   VkPipelineLayout triangle_pipeline_layout_;
 
   VkPipeline triangle_pipeline_;
+  VkPipeline colored_triangle_pipeline_;
 
+  int selected_shader_ = 0;
   // Initialization Helpers.
   void InitVulkan();
   void InitSwapchain();

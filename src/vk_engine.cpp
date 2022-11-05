@@ -268,6 +268,33 @@ void VulkanEngine::InitPipelines() {
 
   vkDestroyShaderModule(device_, triangle_vert_shader.value(), nullptr);
   vkDestroyShaderModule(device_, triangle_frag_shader.value(), nullptr);
+
+  auto colored_triangle_frag_shader =
+      LoadShaderModule("../../shaders/colored_triangle.frag.spv");
+  if (colored_triangle_frag_shader.has_value()) {
+    std::cout << "Colored triangle fragment shader successfully loaded.\n";
+  } else {
+    std::cerr << "Error when building colored triangle fragment shader.\n";
+  }
+
+  auto colored_triangle_vert_shader =
+      LoadShaderModule("../../shaders/colored_triangle.vert.spv");
+  if (triangle_vert_shader.has_value()) {
+    std::cout << "Colored triangle vertex shader successfully loaded.\n";
+  } else {
+    std::cerr << "Error when building colored triangle vertex shader.\n";
+  }
+
+  builder.shader_stages.clear();
+  builder.shader_stages.push_back(vkinit::PipelineShaderStageCreateInfo(
+      VK_SHADER_STAGE_VERTEX_BIT, colored_triangle_vert_shader.value()));
+  builder.shader_stages.push_back(vkinit::PipelineShaderStageCreateInfo(
+      VK_SHADER_STAGE_FRAGMENT_BIT, colored_triangle_frag_shader.value()));
+
+  colored_triangle_pipeline_ = builder.BuildPipeline(device_, renderpass_);
+
+  vkDestroyShaderModule(device_, colored_triangle_vert_shader.value(), nullptr);
+  vkDestroyShaderModule(device_, colored_triangle_frag_shader.value(), nullptr);
 }
 
 std::optional<VkShaderModule> VulkanEngine::LoadShaderModule(
@@ -393,8 +420,19 @@ void VulkanEngine::Draw() {
                        VK_SUBPASS_CONTENTS_INLINE);
 
   // Mesh draws would go here...
-  vkCmdBindPipeline(command_buffer_, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                    triangle_pipeline_);
+  switch (selected_shader_) {
+    case 0:
+      vkCmdBindPipeline(command_buffer_, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                        colored_triangle_pipeline_);
+      break;
+    case 1:
+      vkCmdBindPipeline(command_buffer_, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                        triangle_pipeline_);
+      break;
+    default:
+      std::cerr << "Unexpected selected shader.\n";
+  }
+
   vkCmdDraw(command_buffer_, 3, 1, 0, 0);
 
   // Finalize the render pass and command buffer.
@@ -458,7 +496,13 @@ void VulkanEngine::Run() {
     // Handle events on queue
     while (SDL_PollEvent(&e) != 0) {
       // close the window when user alt-f4s or clicks the X button
-      if (e.type == SDL_QUIT) bQuit = true;
+      if (e.type == SDL_QUIT) {
+        bQuit = true;
+      } else if (e.type == SDL_KEYDOWN) {
+        if (e.key.keysym.sym == SDLK_SPACE) {
+          selected_shader_ = (selected_shader_ + 1) % 2;
+        }
+      }
     }
 
     Draw();
