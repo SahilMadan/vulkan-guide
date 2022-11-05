@@ -1,11 +1,11 @@
 ﻿
-#include "vk_engine.h"
+#include "vk_engine.hpp"
 
 #include <SDL.h>
 #include <SDL_vulkan.h>
 #include <VkBootstrap.h>
-#include <vk_initializers.h>
-#include <vk_types.h>
+#include <vk_initializers.hpp>
+#include <vk_types.hpp>
 
 #include <fstream>
 #include <iostream>

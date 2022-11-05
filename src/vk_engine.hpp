@@ -3,7 +3,7 @@
 
 #pragma once
 
-#include <vk_types.h>
+#include <vk_types.hpp>
 
 #include <deletion_queue.hpp>
 #include <optional>
