@@ -3,12 +3,14 @@
 
 #pragma once
 
-#include <vk_types.hpp>
+#include <vk_mem_alloc.h>
 
 #include <deletion_queue.hpp>
 #include <optional>
 #include <string>
 #include <vector>
+#include <vk_mesh.hpp>
+#include <vk_types.hpp>
 
 class VulkanEngine {
  public:
@@ -75,6 +77,11 @@ class VulkanEngine {
 
   VkPipeline triangle_pipeline_;
   VkPipeline colored_triangle_pipeline_;
+  VkPipeline mesh_pipeline_;
+
+  VmaAllocator allocator_;
+
+  Mesh triangle_mesh_;
 
   int selected_shader_ = 0;
 
@@ -88,6 +95,9 @@ class VulkanEngine {
   void InitFramebuffers();
   void InitSyncStructs();
   void InitPipelines();
+
+  void LoadMeshes();
+  void UploadMesh(Mesh& mesh);
 
   std::optional<VkShaderModule> LoadShaderModule(const std::string& path);
 };

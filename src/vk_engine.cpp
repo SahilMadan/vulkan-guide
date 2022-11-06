@@ -4,15 +4,19 @@
 #include <SDL.h>
 #include <SDL_vulkan.h>
 #include <VkBootstrap.h>
-#include <vk_initializers.hpp>
-#include <vk_types.hpp>
 
 #include <fstream>
 #include <iostream>
+#include <vk_initializers.hpp>
+#include <vk_types.hpp>
+
+#define VMA_IMPLEMENTATION
+#include <vk_mem_alloc.h>
 
 namespace {
 
 constexpr uint32_t kSyncWaitTimeoutNs = 1000000000;
+constexpr int kShaderCount = 3;
 
 // Immediately abort on error.
 #define VK_CHECK(x)                                               \
@@ -36,9 +40,6 @@ void VulkanEngine::Init() {
                              SDL_WINDOWPOS_UNDEFINED, window_extent_.width,
                              window_extent_.height, window_flags);
 
-  // everything went fine
-  is_initialized_ = true;
-
   InitVulkan();
   InitSwapchain();
   InitCommands();
@@ -46,6 +47,11 @@ void VulkanEngine::Init() {
   InitFramebuffers();
   InitSyncStructs();
   InitPipelines();
+
+  LoadMeshes();
+
+  // everything went fine
+  is_initialized_ = true;
 }
 
 void VulkanEngine::InitVulkan() {
@@ -81,6 +87,13 @@ void VulkanEngine::InitVulkan() {
   graphics_queue_ = vkb_device.get_queue(vkb::QueueType::graphics).value();
   graphics_queue_family_ =
       vkb_device.get_queue_index(vkb::QueueType::graphics).value();
+
+  // Initialize the memory allocator.
+  VmaAllocatorCreateInfo allocator_info = {};
+  allocator_info.physicalDevice = gpu_;
+  allocator_info.device = device_;
+  allocator_info.instance = instance_;
+  vmaCreateAllocator(&allocator_info, &allocator_);
 }
 
 void VulkanEngine::InitSwapchain() {
@@ -310,7 +323,7 @@ void VulkanEngine::InitPipelines() {
 
   auto colored_triangle_vert_shader =
       LoadShaderModule("../../shaders/colored_triangle.vert.spv");
-  if (triangle_vert_shader.has_value()) {
+  if (colored_triangle_vert_shader.has_value()) {
     std::cout << "Colored triangle vertex shader successfully loaded.\n";
   } else {
     std::cerr << "Error when building colored triangle vertex shader.\n";
@@ -328,7 +341,42 @@ void VulkanEngine::InitPipelines() {
     vkDestroyPipeline(device_, colored_triangle_pipeline_, nullptr);
   });
   vkDestroyShaderModule(device_, colored_triangle_vert_shader.value(), nullptr);
+
+  // Mesh pipeline.
+
+  VertexInputDescription vertex_description = Vertex::GetInputDescription();
+
+  builder.vertex_input_info.pVertexAttributeDescriptions =
+      vertex_description.attributes.data();
+  builder.vertex_input_info.vertexAttributeDescriptionCount =
+      vertex_description.attributes.size();
+
+  builder.vertex_input_info.pVertexBindingDescriptions =
+      vertex_description.bindings.data();
+  builder.vertex_input_info.vertexBindingDescriptionCount =
+      vertex_description.bindings.size();
+
+  builder.shader_stages.clear();
+
+  auto mesh_vert_shader =
+      LoadShaderModule("../../shaders/triangle_mesh.vert.spv");
+  if (mesh_vert_shader.has_value()) {
+    std::cout << "<Mesh triangle vertex shader successfully loaded.\n";
+  } else {
+    std::cerr << "Error when building mesh triangle vertex shader.\n";
+  }
+
+  builder.shader_stages.push_back(vkinit::PipelineShaderStageCreateInfo(
+      VK_SHADER_STAGE_VERTEX_BIT, mesh_vert_shader.value()));
+  builder.shader_stages.push_back(vkinit::PipelineShaderStageCreateInfo(
+      VK_SHADER_STAGE_FRAGMENT_BIT, colored_triangle_frag_shader.value()));
+
+  mesh_pipeline_ = builder.BuildPipeline(device_, renderpass_);
+
+  vkDestroyShaderModule(device_, mesh_vert_shader.value(), nullptr);
   vkDestroyShaderModule(device_, colored_triangle_frag_shader.value(), nullptr);
+  deletion_queue_.Push(
+      [=]() { vkDestroyPipeline(device_, mesh_pipeline_, nullptr); });
 }
 
 std::optional<VkShaderModule> VulkanEngine::LoadShaderModule(
@@ -365,6 +413,52 @@ std::optional<VkShaderModule> VulkanEngine::LoadShaderModule(
   }
 
   return shader_module;
+}
+
+void VulkanEngine::LoadMeshes() {
+  triangle_mesh_.vertices.resize(3);
+
+  // Vertex positions.
+  triangle_mesh_.vertices[0].position = {1.f, 1.f, 0.f};
+  triangle_mesh_.vertices[1].position = {-1.f, 1.f, 0.f};
+  triangle_mesh_.vertices[2].position = {0.f, -1.f, 0.f};
+
+  // Vertex colors (all green).
+  triangle_mesh_.vertices[0].color = {0.f, 1.f, 0.f};
+  triangle_mesh_.vertices[1].color = {0.f, 1.f, 0.f};
+  triangle_mesh_.vertices[2].color = {0.f, 1.f, 0.f};
+
+  // (We don't care about vertex normals).
+
+  UploadMesh(triangle_mesh_);
+}
+
+void VulkanEngine::UploadMesh(Mesh& mesh) {
+  // Allocate vertex buffer.
+  VkBufferCreateInfo info = {};
+  info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+  info.pNext = nullptr;
+
+  // Total size, in bytes, of the buffer we are allocating.
+  info.size = mesh.vertices.size() * sizeof(Vertex);
+  info.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
+
+  // Writeable by CPU, readable by GPU.
+  VmaAllocationCreateInfo allocation_info = {};
+  allocation_info.usage = VMA_MEMORY_USAGE_CPU_TO_GPU;
+
+  VK_CHECK(vmaCreateBuffer(allocator_, &info, &allocation_info,
+                           &mesh.buffer.buffer, &mesh.buffer.allocation,
+                           nullptr));
+
+  deletion_queue_.Push(
+      [=]() { vmaDestroyBuffer(allocator_, mesh.buffer.buffer, nullptr); });
+
+  // Copy vertex data.
+  void* data;
+  vmaMapMemory(allocator_, mesh.buffer.allocation, &data);
+  memcpy(data, mesh.vertices.data(), mesh.vertices.size() * sizeof(Vertex));
+  vmaUnmapMemory(allocator_, mesh.buffer.allocation);
 }
 
 void VulkanEngine::Cleanup() {
@@ -436,20 +530,34 @@ void VulkanEngine::Draw() {
                        VK_SUBPASS_CONTENTS_INLINE);
 
   // Mesh draws would go here...
+  int vertices_count;
   switch (selected_shader_) {
-    case 0:
+    case 0: {
       vkCmdBindPipeline(command_buffer_, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                        colored_triangle_pipeline_);
-      break;
+                        mesh_pipeline_);
+
+      VkDeviceSize offset = 0;
+      vkCmdBindVertexBuffers(command_buffer_, 0, 1,
+                             &triangle_mesh_.buffer.buffer, &offset);
+
+      vertices_count = triangle_mesh_.vertices.size();
+    } break;
     case 1:
       vkCmdBindPipeline(command_buffer_, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                        colored_triangle_pipeline_);
+      vertices_count = 3;
+      break;
+    case 2:
+      vkCmdBindPipeline(command_buffer_, VK_PIPELINE_BIND_POINT_GRAPHICS,
                         triangle_pipeline_);
+      vertices_count = 3;
       break;
     default:
       std::cerr << "Unexpected selected shader.\n";
+      vertices_count = 0;
   }
 
-  vkCmdDraw(command_buffer_, 3, 1, 0, 0);
+  vkCmdDraw(command_buffer_, vertices_count, 1, 0, 0);
 
   // Finalize the render pass and command buffer.
   vkCmdEndRenderPass(command_buffer_);
@@ -516,7 +624,7 @@ void VulkanEngine::Run() {
         bQuit = true;
       } else if (e.type == SDL_KEYDOWN) {
         if (e.key.keysym.sym == SDLK_SPACE) {
-          selected_shader_ = (selected_shader_ + 1) % 2;
+          selected_shader_ = (selected_shader_ + 1) % kShaderCount;
         }
       }
     }
