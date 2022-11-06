@@ -94,6 +94,8 @@ void VulkanEngine::InitVulkan() {
   allocator_info.device = device_;
   allocator_info.instance = instance_;
   vmaCreateAllocator(&allocator_info, &allocator_);
+
+  deletion_queue_.Push([=]() { vmaDestroyAllocator(allocator_); });
 }
 
 void VulkanEngine::InitSwapchain() {
@@ -361,7 +363,7 @@ void VulkanEngine::InitPipelines() {
   auto mesh_vert_shader =
       LoadShaderModule("../../shaders/triangle_mesh.vert.spv");
   if (mesh_vert_shader.has_value()) {
-    std::cout << "<Mesh triangle vertex shader successfully loaded.\n";
+    std::cout << "Mesh triangle vertex shader successfully loaded.\n";
   } else {
     std::cerr << "Error when building mesh triangle vertex shader.\n";
   }
@@ -451,8 +453,9 @@ void VulkanEngine::UploadMesh(Mesh& mesh) {
                            &mesh.buffer.buffer, &mesh.buffer.allocation,
                            nullptr));
 
-  deletion_queue_.Push(
-      [=]() { vmaDestroyBuffer(allocator_, mesh.buffer.buffer, nullptr); });
+  deletion_queue_.Push([=]() {
+    vmaDestroyBuffer(allocator_, mesh.buffer.buffer, mesh.buffer.allocation);
+  });
 
   // Copy vertex data.
   void* data;
