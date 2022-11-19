@@ -45,6 +45,7 @@ class VulkanEngine {
     VkPipelineColorBlendAttachmentState color_blend_attachment;
     VkPipelineMultisampleStateCreateInfo multisampling;
     VkPipelineLayout pipeline_layout;
+    VkPipelineDepthStencilStateCreateInfo depth_stencil;
 
     VkPipeline BuildPipeline(VkDevice device, VkRenderPass renderpass);
   };
@@ -64,6 +65,10 @@ class VulkanEngine {
   VkFormat swapchain_image_format_;
   std::vector<VkImage> swapchain_images_;
   std::vector<VkImageView> swapchain_image_views_;
+
+  VkImageView depth_image_view_;
+  AllocatedImage depth_image_;
+  VkFormat depth_format_;
 
   VkQueue graphics_queue_;
   uint32_t graphics_queue_family_;
