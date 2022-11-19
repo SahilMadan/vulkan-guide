@@ -17,7 +17,7 @@
 namespace {
 
 constexpr uint32_t kSyncWaitTimeoutNs = 1000000000;
-constexpr int kShaderCount = 3;
+constexpr int kShaderCount = 4;
 
 // Immediately abort on error.
 #define VK_CHECK(x)                                               \
@@ -452,6 +452,10 @@ void VulkanEngine::LoadMeshes() {
   // (We don't care about vertex normals).
 
   UploadMesh(triangle_mesh_);
+
+  // Load monkey mesh.
+  monkey_mesh_.LoadFromObj("../../assets/monkey_smooth.obj");
+  UploadMesh(monkey_mesh_);
 }
 
 void VulkanEngine::UploadMesh(Mesh& mesh) {
@@ -559,6 +563,36 @@ void VulkanEngine::Draw() {
                         mesh_pipeline_);
 
       VkDeviceSize offset = 0;
+      vkCmdBindVertexBuffers(command_buffer_, 0, 1, &monkey_mesh_.buffer.buffer,
+                             &offset);
+
+      vertices_count = monkey_mesh_.vertices.size();
+
+      glm::vec3 camera_position = {0.f, 0.f, -2.f};
+      glm::mat4 view = glm::translate(glm::mat4(1.f), camera_position);
+
+      glm::mat4 projection =
+          glm::perspective(glm::radians(70.f), 1700.f / 900.f, 0.1f, 200.f);
+      projection[1][1] *= -1;
+
+      glm::mat4 model =
+          glm::rotate(glm::mat4(1.f), glm::radians(framenumber_ * 0.4f),
+                      glm::vec3(0, 1, 0));
+
+      glm::mat4 mvp = projection * view * model;
+
+      MeshPushConstants constant;
+      constant.matrix = mvp;
+
+      vkCmdPushConstants(command_buffer_, mesh_pipeline_layout_,
+                         VK_SHADER_STAGE_VERTEX_BIT, 0,
+                         sizeof(MeshPushConstants), &constant);
+    } break;
+    case 1: {
+      vkCmdBindPipeline(command_buffer_, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                        mesh_pipeline_);
+
+      VkDeviceSize offset = 0;
       vkCmdBindVertexBuffers(command_buffer_, 0, 1,
                              &triangle_mesh_.buffer.buffer, &offset);
 
@@ -584,12 +618,12 @@ void VulkanEngine::Draw() {
                          VK_SHADER_STAGE_VERTEX_BIT, 0,
                          sizeof(MeshPushConstants), &constant);
     } break;
-    case 1:
+    case 2:
       vkCmdBindPipeline(command_buffer_, VK_PIPELINE_BIND_POINT_GRAPHICS,
                         colored_triangle_pipeline_);
       vertices_count = 3;
       break;
-    case 2:
+    case 3:
       vkCmdBindPipeline(command_buffer_, VK_PIPELINE_BIND_POINT_GRAPHICS,
                         triangle_pipeline_);
       vertices_count = 3;

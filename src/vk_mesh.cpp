@@ -38,3 +38,68 @@ VertexInputDescription Vertex::GetInputDescription() {
 
   return description;
 }
+
+bool Mesh::LoadFromObj(const char* filename) {
+  // Attrib will contain the vertex arrays of the file.
+  tinyobj::attrib_t attrib;
+  // Shapes will contain the info for each separate object in the file.
+  std::vector<tinyobj::shape_t> shapes;
+  // Materials will contain the information about the materials of each shape.
+  // TODO: Currently unused.
+  std::vector<tinyobj::material_t> materials;
+
+  std::string error;
+  std::string warning;
+
+  tinyobj::LoadObj(&attrib, &shapes, &materials, &warning, &error, filename,
+                   /*readMaterialFunc=*/nullptr);
+
+  if (!error.empty()) {
+    std::cerr << "Error: " << error << std::endl;
+    return false;
+  }
+
+  if (!warning.empty()) {
+    std::cout << "Warning: " << warning << std::endl;
+  }
+
+  for (size_t s = 0; s < shapes.size(); s++) {
+    // Loop over the faces (polygon).
+    size_t index_offset = 0;
+    for (size_t f = 0; f < shapes[s].mesh.num_face_vertices.size(); f++) {
+      // Hardcode loading to triangle.
+      int fv = 3;
+
+      // Loop over vertices in the faces.
+      for (size_t v = 0; v < fv; v++) {
+        tinyobj::index_t index = shapes[s].mesh.indices[index_offset + v];
+
+        // Vertex position.
+        tinyobj::real_t vx = attrib.vertices[3 * index.vertex_index + 0];
+        tinyobj::real_t vy = attrib.vertices[3 * index.vertex_index + 1];
+        tinyobj::real_t vz = attrib.vertices[3 * index.vertex_index + 2];
+
+        // Vertex normal.
+        tinyobj::real_t nx = attrib.normals[3 * index.normal_index + 0];
+        tinyobj::real_t ny = attrib.normals[3 * index.normal_index + 1];
+        tinyobj::real_t nz = attrib.normals[3 * index.normal_index + 2];
+
+        Vertex vertex;
+        vertex.position.x = vx;
+        vertex.position.y = vy;
+        vertex.position.z = vz;
+
+        vertex.normal.x = nx;
+        vertex.normal.y = ny;
+        vertex.normal.z = nz;
+
+        // Set the vertex color as the vertex normal.
+        vertex.color = vertex.normal;
+
+        vertices.push_back(vertex);
+      }
+      index_offset += fv;
+    }
+  }
+  return false;
+}

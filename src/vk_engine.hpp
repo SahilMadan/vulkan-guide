@@ -89,6 +89,7 @@ class VulkanEngine {
   VmaAllocator allocator_;
 
   Mesh triangle_mesh_;
+  Mesh monkey_mesh_;
 
   int selected_shader_ = 0;
 
