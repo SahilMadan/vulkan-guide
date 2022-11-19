@@ -6,6 +6,7 @@
 #include <VkBootstrap.h>
 
 #include <fstream>
+#include <glm/gtc/matrix_transform.hpp>
 #include <iostream>
 #include <vk_initializers.hpp>
 #include <vk_types.hpp>
@@ -373,6 +374,24 @@ void VulkanEngine::InitPipelines() {
   builder.shader_stages.push_back(vkinit::PipelineShaderStageCreateInfo(
       VK_SHADER_STAGE_FRAGMENT_BIT, colored_triangle_frag_shader.value()));
 
+  VkPushConstantRange push_constant;
+  push_constant.offset = 0;
+  push_constant.size = sizeof(MeshPushConstants);
+  push_constant.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+
+  VkPipelineLayoutCreateInfo mesh_pipeline_layout_info =
+      vkinit::PipelineLayoutCreateInfo();
+  mesh_pipeline_layout_info.pushConstantRangeCount = 1;
+  mesh_pipeline_layout_info.pPushConstantRanges = &push_constant;
+
+  VK_CHECK(vkCreatePipelineLayout(device_, &mesh_pipeline_layout_info, nullptr,
+                                  &mesh_pipeline_layout_));
+  deletion_queue_.Push([=]() {
+    vkDestroyPipelineLayout(device_, mesh_pipeline_layout_, nullptr);
+  });
+
+  builder.pipeline_layout = mesh_pipeline_layout_;
+
   mesh_pipeline_ = builder.BuildPipeline(device_, renderpass_);
 
   vkDestroyShaderModule(device_, mesh_vert_shader.value(), nullptr);
@@ -544,6 +563,26 @@ void VulkanEngine::Draw() {
                              &triangle_mesh_.buffer.buffer, &offset);
 
       vertices_count = triangle_mesh_.vertices.size();
+
+      glm::vec3 camera_position = {0.f, 0.f, -2.f};
+      glm::mat4 view = glm::translate(glm::mat4(1.f), camera_position);
+
+      glm::mat4 projection =
+          glm::perspective(glm::radians(70.f), 1700.f / 900.f, 0.1f, 200.f);
+      projection[1][1] *= -1;
+
+      glm::mat4 model =
+          glm::rotate(glm::mat4(1.f), glm::radians(framenumber_ * 0.4f),
+                      glm::vec3(0, 1, 0));
+
+      glm::mat4 mvp = projection * view * model;
+
+      MeshPushConstants constant;
+      constant.matrix = mvp;
+
+      vkCmdPushConstants(command_buffer_, mesh_pipeline_layout_,
+                         VK_SHADER_STAGE_VERTEX_BIT, 0,
+                         sizeof(MeshPushConstants), &constant);
     } break;
     case 1:
       vkCmdBindPipeline(command_buffer_, VK_PIPELINE_BIND_POINT_GRAPHICS,

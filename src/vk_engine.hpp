@@ -6,6 +6,7 @@
 #include <vk_mem_alloc.h>
 
 #include <deletion_queue.hpp>
+#include <glm/glm.hpp>
 #include <optional>
 #include <string>
 #include <vector>
@@ -48,6 +49,11 @@ class VulkanEngine {
     VkPipeline BuildPipeline(VkDevice device, VkRenderPass renderpass);
   };
 
+  struct MeshPushConstants {
+    glm::vec4 data;
+    glm::mat4 matrix;
+  };
+
   VkInstance instance_;
   VkDebugUtilsMessengerEXT debug_messenger_;
   VkPhysicalDevice gpu_;
@@ -74,6 +80,7 @@ class VulkanEngine {
   VkFence render_fence_;
 
   VkPipelineLayout triangle_pipeline_layout_;
+  VkPipelineLayout mesh_pipeline_layout_;
 
   VkPipeline triangle_pipeline_;
   VkPipeline colored_triangle_pipeline_;
