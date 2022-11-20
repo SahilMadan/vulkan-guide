@@ -17,7 +17,6 @@
 namespace {
 
 constexpr uint32_t kSyncWaitTimeoutNs = 1000000000;
-constexpr int kShaderCount = 4;
 
 // Immediately abort on error.
 #define VK_CHECK(x)                                               \
@@ -50,6 +49,8 @@ void VulkanEngine::Init() {
   InitPipelines();
 
   LoadMeshes();
+
+  InitScene();
 
   // everything went fine
   is_initialized_ = true;
@@ -331,39 +332,7 @@ void VulkanEngine::InitSyncStructs() {
 }
 
 void VulkanEngine::InitPipelines() {
-  auto triangle_frag_shader =
-      LoadShaderModule("../../shaders/triangle.frag.spv");
-  if (triangle_frag_shader.has_value()) {
-    std::cout << "Triangle fragment shader successfully loaded.\n";
-  } else {
-    std::cerr << "Error when building triangle fragment shader.\n";
-  }
-
-  auto triangle_vert_shader =
-      LoadShaderModule("../../shaders/triangle.vert.spv");
-  if (triangle_vert_shader.has_value()) {
-    std::cout << "Triangle vertex shader successfully loaded.\n";
-  } else {
-    std::cerr << "Error when building triangle vertex shader.\n";
-  }
-
-  VkPipelineLayoutCreateInfo pipeline_layout_info =
-      vkinit::PipelineLayoutCreateInfo();
-  VK_CHECK(vkCreatePipelineLayout(device_, &pipeline_layout_info, nullptr,
-                                  &triangle_pipeline_layout_));
-
-  deletion_queue_.Push([=]() {
-    vkDestroyPipelineLayout(device_, triangle_pipeline_layout_, nullptr);
-  });
-
   PipelineBuilder builder;
-
-  // Shader stages.
-  builder.shader_stages.push_back(vkinit::PipelineShaderStageCreateInfo(
-      VK_SHADER_STAGE_VERTEX_BIT, triangle_vert_shader.value()));
-  builder.shader_stages.push_back(vkinit::PipelineShaderStageCreateInfo(
-      VK_SHADER_STAGE_FRAGMENT_BIT, triangle_frag_shader.value()));
-
   // How to read vertices from vertex buffers.
   builder.vertex_input_info = vkinit::VertexInputStateCreateInfo();
 
@@ -387,48 +356,8 @@ void VulkanEngine::InitPipelines() {
 
   builder.color_blend_attachment = vkinit::ColorBlendAttachmentState();
 
-  builder.pipeline_layout = triangle_pipeline_layout_;
-
   builder.depth_stencil =
       vkinit::DepthStencilCreateInfo(true, true, VK_COMPARE_OP_LESS_OR_EQUAL);
-
-  triangle_pipeline_ = builder.BuildPipeline(device_, renderpass_);
-
-  deletion_queue_.Push(
-      [=]() { vkDestroyPipeline(device_, triangle_pipeline_, nullptr); });
-  vkDestroyShaderModule(device_, triangle_vert_shader.value(), nullptr);
-  vkDestroyShaderModule(device_, triangle_frag_shader.value(), nullptr);
-
-  auto colored_triangle_frag_shader =
-      LoadShaderModule("../../shaders/colored_triangle.frag.spv");
-  if (colored_triangle_frag_shader.has_value()) {
-    std::cout << "Colored triangle fragment shader successfully loaded.\n";
-  } else {
-    std::cerr << "Error when building colored triangle fragment shader.\n";
-  }
-
-  auto colored_triangle_vert_shader =
-      LoadShaderModule("../../shaders/colored_triangle.vert.spv");
-  if (colored_triangle_vert_shader.has_value()) {
-    std::cout << "Colored triangle vertex shader successfully loaded.\n";
-  } else {
-    std::cerr << "Error when building colored triangle vertex shader.\n";
-  }
-
-  builder.shader_stages.clear();
-  builder.shader_stages.push_back(vkinit::PipelineShaderStageCreateInfo(
-      VK_SHADER_STAGE_VERTEX_BIT, colored_triangle_vert_shader.value()));
-  builder.shader_stages.push_back(vkinit::PipelineShaderStageCreateInfo(
-      VK_SHADER_STAGE_FRAGMENT_BIT, colored_triangle_frag_shader.value()));
-
-  colored_triangle_pipeline_ = builder.BuildPipeline(device_, renderpass_);
-
-  deletion_queue_.Push([=]() {
-    vkDestroyPipeline(device_, colored_triangle_pipeline_, nullptr);
-  });
-  vkDestroyShaderModule(device_, colored_triangle_vert_shader.value(), nullptr);
-
-  // Mesh pipeline.
 
   VertexInputDescription vertex_description = Vertex::GetInputDescription();
 
@@ -442,14 +371,20 @@ void VulkanEngine::InitPipelines() {
   builder.vertex_input_info.vertexBindingDescriptionCount =
       vertex_description.bindings.size();
 
-  builder.shader_stages.clear();
-
   auto mesh_vert_shader =
       LoadShaderModule("../../shaders/triangle_mesh.vert.spv");
   if (mesh_vert_shader.has_value()) {
     std::cout << "Mesh triangle vertex shader successfully loaded.\n";
   } else {
     std::cerr << "Error when building mesh triangle vertex shader.\n";
+  }
+
+  auto colored_triangle_frag_shader =
+      LoadShaderModule("../../shaders/colored_triangle.frag.spv");
+  if (colored_triangle_frag_shader.has_value()) {
+    std::cout << "Colored triangle fragment shader successfully loaded.\n";
+  } else {
+    std::cerr << "Error when building colored triangle fragment shader.\n";
   }
 
   builder.shader_stages.push_back(vkinit::PipelineShaderStageCreateInfo(
@@ -467,20 +402,52 @@ void VulkanEngine::InitPipelines() {
   mesh_pipeline_layout_info.pushConstantRangeCount = 1;
   mesh_pipeline_layout_info.pPushConstantRanges = &push_constant;
 
+  VkPipelineLayout mesh_pipeline_layout;
+
   VK_CHECK(vkCreatePipelineLayout(device_, &mesh_pipeline_layout_info, nullptr,
-                                  &mesh_pipeline_layout_));
-  deletion_queue_.Push([=]() {
-    vkDestroyPipelineLayout(device_, mesh_pipeline_layout_, nullptr);
-  });
+                                  &mesh_pipeline_layout));
 
-  builder.pipeline_layout = mesh_pipeline_layout_;
+  builder.pipeline_layout = mesh_pipeline_layout;
 
-  mesh_pipeline_ = builder.BuildPipeline(device_, renderpass_);
+  VkPipeline mesh_pipeline;
+  mesh_pipeline = builder.BuildPipeline(device_, renderpass_);
 
   vkDestroyShaderModule(device_, mesh_vert_shader.value(), nullptr);
   vkDestroyShaderModule(device_, colored_triangle_frag_shader.value(), nullptr);
-  deletion_queue_.Push(
-      [=]() { vkDestroyPipeline(device_, mesh_pipeline_, nullptr); });
+
+  CreateMaterial(mesh_pipeline, mesh_pipeline_layout, "defaultmesh");
+
+  deletion_queue_.Push([=]() {
+    Material* material = GetMaterial("defaultmesh");
+    if (!material) {
+      return;
+    }
+    vkDestroyPipelineLayout(device_, material->pipeline_layout, nullptr);
+    vkDestroyPipeline(device_, material->pipeline, nullptr);
+  });
+}
+
+void VulkanEngine::InitScene() {
+  RenderObject monkey;
+  monkey.mesh = GetMesh("monkey");
+  monkey.material = GetMaterial("defaultmesh");
+  monkey.transform = glm::mat4(1.f);
+  renderables_.push_back(monkey);
+
+  for (int x = -20; x <= 20; x++) {
+    for (int y = -20; y <= 20; y++) {
+      RenderObject triangle;
+      triangle.mesh = GetMesh("triangle");
+      triangle.material = GetMaterial("defaultmesh");
+
+      glm::mat4 translation =
+          glm::translate(glm::mat4(1.f), glm::vec3(x, 0, y));
+      glm::mat4 scale = glm::scale(glm::mat4(1.f), glm::vec3(.2f, .2f, .2f));
+      triangle.transform = translation * scale;
+
+      renderables_.push_back(triangle);
+    }
+  }
 }
 
 std::optional<VkShaderModule> VulkanEngine::LoadShaderModule(
@@ -520,25 +487,31 @@ std::optional<VkShaderModule> VulkanEngine::LoadShaderModule(
 }
 
 void VulkanEngine::LoadMeshes() {
-  triangle_mesh_.vertices.resize(3);
+  Mesh triangle_mesh;
+  triangle_mesh.vertices.resize(3);
 
   // Vertex positions.
-  triangle_mesh_.vertices[0].position = {1.f, 1.f, 0.f};
-  triangle_mesh_.vertices[1].position = {-1.f, 1.f, 0.f};
-  triangle_mesh_.vertices[2].position = {0.f, -1.f, 0.f};
+  triangle_mesh.vertices[0].position = {1.f, 1.f, 0.f};
+  triangle_mesh.vertices[1].position = {-1.f, 1.f, 0.f};
+  triangle_mesh.vertices[2].position = {0.f, -1.f, 0.f};
 
   // Vertex colors (all green).
-  triangle_mesh_.vertices[0].color = {0.f, 1.f, 0.f};
-  triangle_mesh_.vertices[1].color = {0.f, 1.f, 0.f};
-  triangle_mesh_.vertices[2].color = {0.f, 1.f, 0.f};
+  triangle_mesh.vertices[0].color = {0.f, 1.f, 0.f};
+  triangle_mesh.vertices[1].color = {0.f, 1.f, 0.f};
+  triangle_mesh.vertices[2].color = {0.f, 1.f, 0.f};
 
   // (We don't care about vertex normals).
 
-  UploadMesh(triangle_mesh_);
+  UploadMesh(triangle_mesh);
+
+  meshes_["triangle"] = triangle_mesh;
 
   // Load monkey mesh.
-  monkey_mesh_.LoadFromObj("../../assets/monkey_smooth.obj");
-  UploadMesh(monkey_mesh_);
+  Mesh monkey_mesh;
+  monkey_mesh.LoadFromObj("../../assets/monkey_smooth.obj");
+  UploadMesh(monkey_mesh);
+
+  meshes_["monkey"] = monkey_mesh;
 }
 
 void VulkanEngine::UploadMesh(Mesh& mesh) {
@@ -568,6 +541,75 @@ void VulkanEngine::UploadMesh(Mesh& mesh) {
   vmaMapMemory(allocator_, mesh.buffer.allocation, &data);
   memcpy(data, mesh.vertices.data(), mesh.vertices.size() * sizeof(Vertex));
   vmaUnmapMemory(allocator_, mesh.buffer.allocation);
+}
+
+VulkanEngine::Material* VulkanEngine::CreateMaterial(VkPipeline pipeline,
+                                                     VkPipelineLayout layout,
+                                                     const std::string& name) {
+  Material material;
+  material.pipeline = pipeline;
+  material.pipeline_layout = layout;
+  materials_[name] = material;
+
+  return &materials_[name];
+}
+
+VulkanEngine::Material* VulkanEngine::GetMaterial(const std::string& name) {
+  auto it = materials_.find(name);
+  if (it == materials_.end()) {
+    return nullptr;
+  }
+
+  return &(*it).second;
+}
+
+Mesh* VulkanEngine::GetMesh(const std::string& name) {
+  auto it = meshes_.find(name);
+  if (it == meshes_.end()) {
+    return nullptr;
+  }
+
+  return &(*it).second;
+}
+
+void VulkanEngine::DrawObjects(VkCommandBuffer cmd, RenderObject* first,
+                               int count) {
+  // Make a mvp matrix.
+  glm::vec3 camera_position = {0.f, -6.f, -10.f};
+  glm::mat4 view = glm::translate(glm::mat4(1.f), camera_position);
+
+  glm::mat4 projection =
+      glm::perspective(glm::radians(70.f), 1700.f / 900.f, 0.1f, 200.f);
+  projection[1][1] *= -1;
+
+  Mesh* last_mesh = nullptr;
+  Material* last_material = nullptr;
+
+  for (int i = 0; i < count; i++) {
+    RenderObject& object = first[i];
+    if (object.material != last_material) {
+      vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                        object.material->pipeline);
+      last_material = object.material;
+    }
+
+    glm::mat4 mvp = projection * view * object.transform;
+
+    MeshPushConstants constants;
+    constants.matrix = mvp;
+
+    vkCmdPushConstants(cmd, object.material->pipeline_layout,
+                       VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(MeshPushConstants),
+                       &constants);
+
+    if (object.mesh != last_mesh) {
+      VkDeviceSize offset = 0;
+      vkCmdBindVertexBuffers(cmd, 0, 1, &object.mesh->buffer.buffer, &offset);
+      last_mesh = object.mesh;
+    }
+
+    vkCmdDraw(cmd, object.mesh->vertices.size(), 1, 0, 0);
+  }
 }
 
 void VulkanEngine::Cleanup() {
@@ -642,85 +684,7 @@ void VulkanEngine::Draw() {
   vkCmdBeginRenderPass(command_buffer_, &renderpass_begin_info,
                        VK_SUBPASS_CONTENTS_INLINE);
 
-  // Mesh draws would go here...
-  int vertices_count;
-  switch (selected_shader_) {
-    case 0: {
-      vkCmdBindPipeline(command_buffer_, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                        mesh_pipeline_);
-
-      VkDeviceSize offset = 0;
-      vkCmdBindVertexBuffers(command_buffer_, 0, 1, &monkey_mesh_.buffer.buffer,
-                             &offset);
-
-      vertices_count = monkey_mesh_.vertices.size();
-
-      glm::vec3 camera_position = {0.f, 0.f, -2.f};
-      glm::mat4 view = glm::translate(glm::mat4(1.f), camera_position);
-
-      glm::mat4 projection =
-          glm::perspective(glm::radians(70.f), 1700.f / 900.f, 0.1f, 200.f);
-      projection[1][1] *= -1;
-
-      glm::mat4 model =
-          glm::rotate(glm::mat4(1.f), glm::radians(framenumber_ * 0.4f),
-                      glm::vec3(0, 1, 0));
-
-      glm::mat4 mvp = projection * view * model;
-
-      MeshPushConstants constant;
-      constant.matrix = mvp;
-
-      vkCmdPushConstants(command_buffer_, mesh_pipeline_layout_,
-                         VK_SHADER_STAGE_VERTEX_BIT, 0,
-                         sizeof(MeshPushConstants), &constant);
-    } break;
-    case 1: {
-      vkCmdBindPipeline(command_buffer_, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                        mesh_pipeline_);
-
-      VkDeviceSize offset = 0;
-      vkCmdBindVertexBuffers(command_buffer_, 0, 1,
-                             &triangle_mesh_.buffer.buffer, &offset);
-
-      vertices_count = triangle_mesh_.vertices.size();
-
-      glm::vec3 camera_position = {0.f, 0.f, -2.f};
-      glm::mat4 view = glm::translate(glm::mat4(1.f), camera_position);
-
-      glm::mat4 projection =
-          glm::perspective(glm::radians(70.f), 1700.f / 900.f, 0.1f, 200.f);
-      projection[1][1] *= -1;
-
-      glm::mat4 model =
-          glm::rotate(glm::mat4(1.f), glm::radians(framenumber_ * 0.4f),
-                      glm::vec3(0, 1, 0));
-
-      glm::mat4 mvp = projection * view * model;
-
-      MeshPushConstants constant;
-      constant.matrix = mvp;
-
-      vkCmdPushConstants(command_buffer_, mesh_pipeline_layout_,
-                         VK_SHADER_STAGE_VERTEX_BIT, 0,
-                         sizeof(MeshPushConstants), &constant);
-    } break;
-    case 2:
-      vkCmdBindPipeline(command_buffer_, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                        colored_triangle_pipeline_);
-      vertices_count = 3;
-      break;
-    case 3:
-      vkCmdBindPipeline(command_buffer_, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                        triangle_pipeline_);
-      vertices_count = 3;
-      break;
-    default:
-      std::cerr << "Unexpected selected shader.\n";
-      vertices_count = 0;
-  }
-
-  vkCmdDraw(command_buffer_, vertices_count, 1, 0, 0);
+  DrawObjects(command_buffer_, renderables_.data(), renderables_.size());
 
   // Finalize the render pass and command buffer.
   vkCmdEndRenderPass(command_buffer_);
@@ -785,10 +749,6 @@ void VulkanEngine::Run() {
       // close the window when user alt-f4s or clicks the X button
       if (e.type == SDL_QUIT) {
         bQuit = true;
-      } else if (e.type == SDL_KEYDOWN) {
-        if (e.key.keysym.sym == SDLK_SPACE) {
-          selected_shader_ = (selected_shader_ + 1) % kShaderCount;
-        }
       }
     }
 

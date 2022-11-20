@@ -55,6 +55,17 @@ class VulkanEngine {
     glm::mat4 matrix;
   };
 
+  struct Material {
+    VkPipeline pipeline;
+    VkPipelineLayout pipeline_layout;
+  };
+
+  struct RenderObject {
+    Mesh* mesh;
+    Material* material;
+    glm::mat4 transform;
+  };
+
   VkInstance instance_;
   VkDebugUtilsMessengerEXT debug_messenger_;
   VkPhysicalDevice gpu_;
@@ -84,19 +95,12 @@ class VulkanEngine {
   // Fence used for CPU <-> GPU sync.
   VkFence render_fence_;
 
-  VkPipelineLayout triangle_pipeline_layout_;
-  VkPipelineLayout mesh_pipeline_layout_;
-
-  VkPipeline triangle_pipeline_;
-  VkPipeline colored_triangle_pipeline_;
-  VkPipeline mesh_pipeline_;
-
   VmaAllocator allocator_;
 
-  Mesh triangle_mesh_;
-  Mesh monkey_mesh_;
+  std::vector<RenderObject> renderables_;
 
-  int selected_shader_ = 0;
+  std::unordered_map<std::string, Material> materials_;
+  std::unordered_map<std::string, Mesh> meshes_;
 
   DeletionQueue deletion_queue_;
 
@@ -108,9 +112,18 @@ class VulkanEngine {
   void InitFramebuffers();
   void InitSyncStructs();
   void InitPipelines();
+  void InitScene();
 
   void LoadMeshes();
   void UploadMesh(Mesh& mesh);
+
+  Material* CreateMaterial(VkPipeline pipeline, VkPipelineLayout layout,
+                           const std::string& name);
+
+  Material* GetMaterial(const std::string& name);
+  Mesh* GetMesh(const std::string& name);
+
+  void DrawObjects(VkCommandBuffer cmd, RenderObject* first, int count);
 
   std::optional<VkShaderModule> LoadShaderModule(const std::string& path);
 };
