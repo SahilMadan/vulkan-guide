@@ -41,4 +41,8 @@ VkImageViewCreateInfo ImageViewCreateInfo(VkFormat format, VkImage image,
 VkPipelineDepthStencilStateCreateInfo DepthStencilCreateInfo(
     bool depth_test, bool depth_write, VkCompareOp compare_op);
 
+VkFenceCreateInfo FenceCreateInfo(VkFenceCreateFlags flags);
+
+VkSemaphoreCreateInfo SemaphoreCreateInfo();
+
 }  // namespace vkinit

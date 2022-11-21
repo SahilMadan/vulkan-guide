@@ -46,6 +46,7 @@ void VulkanEngine::Init() {
   InitDefaultRenderpass();
   InitFramebuffers();
   InitSyncStructs();
+  InitDescriptors();
   InitPipelines();
 
   LoadMeshes();
@@ -161,20 +162,22 @@ void VulkanEngine::InitCommands() {
   VkCommandPoolCreateInfo command_pool_info = vkinit::CommandPoolCreateInfo(
       graphics_queue_family_, VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT);
 
-  VK_CHECK(vkCreateCommandPool(device_, &command_pool_info, nullptr,
-                               &command_pool_));
+  for (int i = 0; i < kVkFrameOverlap; i++) {
+    VK_CHECK(vkCreateCommandPool(device_, &command_pool_info, nullptr,
+                                 &frames_[i].command_pool));
 
-  deletion_queue_.Push([=]() {
-    // This will also destroy all allocated command buffers.
-    vkDestroyCommandPool(device_, command_pool_, nullptr);
-  });
+    deletion_queue_.Push([=]() {
+      // This will also destroy all allocated command buffers.
+      vkDestroyCommandPool(device_, frames_[i].command_pool, nullptr);
+    });
 
-  // Alloate the default command buffer that we will use for rendering.
-  VkCommandBufferAllocateInfo command_buffer_allocate_info =
-      vkinit::CommandBufferAllocateInfo(command_pool_);
+    // Alloate the default command buffer that we will use for rendering.
+    VkCommandBufferAllocateInfo command_buffer_allocate_info =
+        vkinit::CommandBufferAllocateInfo(frames_[i].command_pool);
 
-  VK_CHECK(vkAllocateCommandBuffers(device_, &command_buffer_allocate_info,
-                                    &command_buffer_));
+    VK_CHECK(vkAllocateCommandBuffers(device_, &command_buffer_allocate_info,
+                                      &frames_[i].command_buffer));
+  }
 }
 
 void VulkanEngine::InitDefaultRenderpass() {
@@ -302,33 +305,121 @@ void VulkanEngine::InitFramebuffers() {
 }
 
 void VulkanEngine::InitSyncStructs() {
-  VkFenceCreateInfo fence_info = {};
-  fence_info.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
-  fence_info.pNext = nullptr;
-
   // Signal when created so we can wait on it before using it on the GPU.
-  fence_info.flags = VK_FENCE_CREATE_SIGNALED_BIT;
+  VkFenceCreateInfo fence_info =
+      vkinit::FenceCreateInfo(VK_FENCE_CREATE_SIGNALED_BIT);
 
-  VK_CHECK(vkCreateFence(device_, &fence_info, nullptr, &render_fence_));
+  VkSemaphoreCreateInfo semaphore_info = vkinit::SemaphoreCreateInfo();
 
-  deletion_queue_.Push(
-      [=]() { vkDestroyFence(device_, render_fence_, nullptr); });
+  for (int i = 0; i < kVkFrameOverlap; i++) {
+    VK_CHECK(
+        vkCreateFence(device_, &fence_info, nullptr, &frames_[i].render_fence));
 
-  VkSemaphoreCreateInfo semaphore_info = {};
-  semaphore_info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
-  semaphore_info.pNext = nullptr;
+    deletion_queue_.Push(
+        [=]() { vkDestroyFence(device_, frames_[i].render_fence, nullptr); });
 
-  semaphore_info.flags = 0;
+    VK_CHECK(vkCreateSemaphore(device_, &semaphore_info, nullptr,
+                               &frames_[i].present_semaphore));
 
-  VK_CHECK(vkCreateSemaphore(device_, &semaphore_info, nullptr,
-                             &present_semaphore_));
-  deletion_queue_.Push(
-      [=]() { vkDestroySemaphore(device_, present_semaphore_, nullptr); });
+    deletion_queue_.Push([=]() {
+      vkDestroySemaphore(device_, frames_[i].present_semaphore, nullptr);
+    });
 
-  VK_CHECK(
-      vkCreateSemaphore(device_, &semaphore_info, nullptr, &render_semaphore_));
-  deletion_queue_.Push(
-      [=]() { vkDestroySemaphore(device_, render_semaphore_, nullptr); });
+    VK_CHECK(vkCreateSemaphore(device_, &semaphore_info, nullptr,
+                               &frames_[i].render_semaphore));
+
+    deletion_queue_.Push([=]() {
+      vkDestroySemaphore(device_, frames_[i].render_semaphore, nullptr);
+    });
+  }
+}
+
+void VulkanEngine::InitDescriptors() {
+  // Create a descriptor pool that will hold 10 uniform buffers.
+  std::vector<VkDescriptorPoolSize> sizes = {
+      {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 10}};
+
+  VkDescriptorPoolCreateInfo descriptor_pool_create_info = {};
+  descriptor_pool_create_info.sType =
+      VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+  descriptor_pool_create_info.pNext = nullptr;
+
+  descriptor_pool_create_info.flags = 0;
+  descriptor_pool_create_info.maxSets = 10;
+  descriptor_pool_create_info.poolSizeCount =
+      static_cast<uint32_t>(sizes.size());
+  descriptor_pool_create_info.pPoolSizes = sizes.data();
+
+  vkCreateDescriptorPool(device_, &descriptor_pool_create_info, nullptr,
+                         &descriptor_pool_);
+
+  VkDescriptorSetLayoutBinding camera_buffer_binding = {};
+  camera_buffer_binding.binding = 0;
+  camera_buffer_binding.descriptorCount = 1;
+  camera_buffer_binding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+
+  camera_buffer_binding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+
+  VkDescriptorSetLayoutCreateInfo set_info = {};
+  set_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+  set_info.pNext = nullptr;
+
+  set_info.bindingCount = 1;
+  set_info.flags = 0;
+  set_info.pBindings = &camera_buffer_binding;
+
+  vkCreateDescriptorSetLayout(device_, &set_info, nullptr, &global_set_layout_);
+
+  for (int i = 0; i < kVkFrameOverlap; i++) {
+    frames_[i].camera_buffer =
+        CreateBuffer(sizeof(GpuCameraData), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+                     VMA_MEMORY_USAGE_CPU_TO_GPU);
+
+    // Allocate one descriptor set for each frame.
+    VkDescriptorSetAllocateInfo allocation_info = {};
+    allocation_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    allocation_info.pNext = nullptr;
+
+    allocation_info.descriptorPool = descriptor_pool_;
+    allocation_info.descriptorSetCount = 1;
+    allocation_info.pSetLayouts = &global_set_layout_;
+
+    vkAllocateDescriptorSets(device_, &allocation_info,
+                             &frames_[i].global_descriptor);
+
+    // Make the descriptor set point to our camera buffer.
+    VkDescriptorBufferInfo buffer_info = {};
+    buffer_info.buffer = frames_[i].camera_buffer.buffer;
+    buffer_info.offset = 0;
+    buffer_info.range = sizeof(GpuCameraData);
+
+    VkWriteDescriptorSet set_write = {};
+    set_write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    set_write.pNext = nullptr;
+
+    // Write into binding number 0...
+    set_write.dstBinding = 0;
+    // ... of the global descriptor.
+    set_write.dstSet = frames_[i].global_descriptor;
+
+    set_write.descriptorCount = 1;
+    set_write.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    set_write.pBufferInfo = &buffer_info;
+
+    vkUpdateDescriptorSets(device_, 1, &set_write, 0, nullptr);
+  }
+
+  for (int i = 0; i < kVkFrameOverlap; i++) {
+    deletion_queue_.Push([&, i]() {
+      vmaDestroyBuffer(allocator_, frames_[i].camera_buffer.buffer,
+                       frames_[i].camera_buffer.allocation);
+    });
+  }
+
+  deletion_queue_.Push([&]() {
+    vkDestroyDescriptorSetLayout(device_, global_set_layout_, nullptr);
+    vkDestroyDescriptorPool(device_, descriptor_pool_, nullptr);
+  });
 }
 
 void VulkanEngine::InitPipelines() {
@@ -401,6 +492,9 @@ void VulkanEngine::InitPipelines() {
       vkinit::PipelineLayoutCreateInfo();
   mesh_pipeline_layout_info.pushConstantRangeCount = 1;
   mesh_pipeline_layout_info.pPushConstantRanges = &push_constant;
+
+  mesh_pipeline_layout_info.setLayoutCount = 1;
+  mesh_pipeline_layout_info.pSetLayouts = &global_set_layout_;
 
   VkPipelineLayout mesh_pipeline_layout;
 
@@ -515,22 +609,9 @@ void VulkanEngine::LoadMeshes() {
 }
 
 void VulkanEngine::UploadMesh(Mesh& mesh) {
-  // Allocate vertex buffer.
-  VkBufferCreateInfo info = {};
-  info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-  info.pNext = nullptr;
-
-  // Total size, in bytes, of the buffer we are allocating.
-  info.size = mesh.vertices.size() * sizeof(Vertex);
-  info.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
-
-  // Writeable by CPU, readable by GPU.
-  VmaAllocationCreateInfo allocation_info = {};
-  allocation_info.usage = VMA_MEMORY_USAGE_CPU_TO_GPU;
-
-  VK_CHECK(vmaCreateBuffer(allocator_, &info, &allocation_info,
-                           &mesh.buffer.buffer, &mesh.buffer.allocation,
-                           nullptr));
+  mesh.buffer = CreateBuffer(mesh.vertices.size() * sizeof(Vertex),
+                             VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                             VMA_MEMORY_USAGE_CPU_TO_GPU);
 
   deletion_queue_.Push([=]() {
     vmaDestroyBuffer(allocator_, mesh.buffer.buffer, mesh.buffer.allocation);
@@ -543,6 +624,28 @@ void VulkanEngine::UploadMesh(Mesh& mesh) {
   vmaUnmapMemory(allocator_, mesh.buffer.allocation);
 }
 
+AllocatedBuffer VulkanEngine::CreateBuffer(size_t allocation_size,
+                                           VkBufferUsageFlags usage_flags,
+                                           VmaMemoryUsage memory_usage) {
+  // Allocate the vertex buffer.
+  VkBufferCreateInfo info = {};
+  info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+  info.pNext = nullptr;
+
+  info.size = allocation_size;
+  info.usage = usage_flags;
+
+  VmaAllocationCreateInfo vma_allocation_info = {};
+  vma_allocation_info.usage = memory_usage;
+
+  AllocatedBuffer buffer;
+
+  VK_CHECK(vmaCreateBuffer(allocator_, &info, &vma_allocation_info,
+                           &buffer.buffer, &buffer.allocation, nullptr));
+
+  return buffer;
+}
+
 VulkanEngine::Material* VulkanEngine::CreateMaterial(VkPipeline pipeline,
                                                      VkPipelineLayout layout,
                                                      const std::string& name) {
@@ -552,6 +655,10 @@ VulkanEngine::Material* VulkanEngine::CreateMaterial(VkPipeline pipeline,
   materials_[name] = material;
 
   return &materials_[name];
+}
+
+VulkanEngine::FrameData& VulkanEngine::GetCurrentFrame() {
+  return frames_[framenumber_ % kVkFrameOverlap];
 }
 
 VulkanEngine::Material* VulkanEngine::GetMaterial(const std::string& name) {
@@ -582,6 +689,18 @@ void VulkanEngine::DrawObjects(VkCommandBuffer cmd, RenderObject* first,
       glm::perspective(glm::radians(70.f), 1700.f / 900.f, 0.1f, 200.f);
   projection[1][1] *= -1;
 
+  GpuCameraData camera_data;
+  camera_data.projection = projection;
+  camera_data.view = view;
+  camera_data.view_projection = projection * view;
+
+  FrameData& frame = GetCurrentFrame();
+
+  void* data;
+  vmaMapMemory(allocator_, frame.camera_buffer.allocation, &data);
+  memcpy(data, &camera_data, sizeof(GpuCameraData));
+  vmaUnmapMemory(allocator_, frame.camera_buffer.allocation);
+
   Mesh* last_mesh = nullptr;
   Material* last_material = nullptr;
 
@@ -591,12 +710,17 @@ void VulkanEngine::DrawObjects(VkCommandBuffer cmd, RenderObject* first,
       vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                         object.material->pipeline);
       last_material = object.material;
+
+      // Bind the descriptor set when changing the pipeline.
+      vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                              object.material->pipeline_layout, 0, 1,
+                              &frame.global_descriptor, 0, nullptr);
     }
 
     glm::mat4 mvp = projection * view * object.transform;
 
     MeshPushConstants constants;
-    constants.matrix = mvp;
+    constants.matrix = object.transform;
 
     vkCmdPushConstants(cmd, object.material->pipeline_layout,
                        VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(MeshPushConstants),
@@ -615,8 +739,10 @@ void VulkanEngine::DrawObjects(VkCommandBuffer cmd, RenderObject* first,
 void VulkanEngine::Cleanup() {
   if (is_initialized_) {
     // Wait for VkCommandBuffer to finish before destroying render pass.
-    VK_CHECK(
-        vkWaitForFences(device_, 1, &render_fence_, true, kSyncWaitTimeoutNs));
+    for (int i = 0; i < kVkFrameOverlap; i++) {
+      VK_CHECK(vkWaitForFences(device_, 1, &frames_[i].render_fence, true,
+                               kSyncWaitTimeoutNs));
+    }
 
     deletion_queue_.Flush();
 
@@ -632,19 +758,20 @@ void VulkanEngine::Cleanup() {
 void VulkanEngine::Draw() {
   // Wait until the GPU has finished rendering the last frame. Timeout of 1
   // second.
-  VK_CHECK(
-      vkWaitForFences(device_, 1, &render_fence_, true, kSyncWaitTimeoutNs));
-  VK_CHECK(vkResetFences(device_, 1, &render_fence_));
+  FrameData& frame = GetCurrentFrame();
+  VK_CHECK(vkWaitForFences(device_, 1, &frame.render_fence, true,
+                           kSyncWaitTimeoutNs));
+  VK_CHECK(vkResetFences(device_, 1, &frame.render_fence));
 
   // Request image from the swapchain, one second timeout.
   uint32_t swapchain_image_index;
   VK_CHECK(vkAcquireNextImageKHR(device_, swapchain_, kSyncWaitTimeoutNs,
-                                 present_semaphore_, nullptr,
+                                 frame.present_semaphore, nullptr,
                                  &swapchain_image_index));
 
   // Now that we're sure that the commands have finished executing, we can
   // safely reset the command buffer to begin recording again.
-  VK_CHECK(vkResetCommandBuffer(command_buffer_, 0));
+  VK_CHECK(vkResetCommandBuffer(frame.command_buffer, 0));
 
   // Begin command buffer recording. We will use this command buffer exactly
   // once, so we want to let Vulkan know that.
@@ -655,7 +782,7 @@ void VulkanEngine::Draw() {
   command_begin_info.pInheritanceInfo = nullptr;
   command_begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
 
-  VK_CHECK(vkBeginCommandBuffer(command_buffer_, &command_begin_info));
+  VK_CHECK(vkBeginCommandBuffer(frame.command_buffer, &command_begin_info));
 
   // DRAW
 
@@ -681,14 +808,14 @@ void VulkanEngine::Draw() {
   renderpass_begin_info.clearValueCount = 2;
   renderpass_begin_info.pClearValues = &clear_values[0];
 
-  vkCmdBeginRenderPass(command_buffer_, &renderpass_begin_info,
+  vkCmdBeginRenderPass(frame.command_buffer, &renderpass_begin_info,
                        VK_SUBPASS_CONTENTS_INLINE);
 
-  DrawObjects(command_buffer_, renderables_.data(), renderables_.size());
+  DrawObjects(frame.command_buffer, renderables_.data(), renderables_.size());
 
   // Finalize the render pass and command buffer.
-  vkCmdEndRenderPass(command_buffer_);
-  VK_CHECK(vkEndCommandBuffer(command_buffer_));
+  vkCmdEndRenderPass(frame.command_buffer);
+  VK_CHECK(vkEndCommandBuffer(frame.command_buffer));
 
   // Prepare the submission to the queue.
   // We want to wait on the |present_semaphore_|, as that semaphore is signaled
@@ -704,17 +831,17 @@ void VulkanEngine::Draw() {
   submit_info.pWaitDstStageMask = &wait_stage;
 
   submit_info.waitSemaphoreCount = 1;
-  submit_info.pWaitSemaphores = &present_semaphore_;
+  submit_info.pWaitSemaphores = &frame.present_semaphore;
 
   submit_info.signalSemaphoreCount = 1;
-  submit_info.pSignalSemaphores = &render_semaphore_;
+  submit_info.pSignalSemaphores = &frame.render_semaphore;
 
   submit_info.commandBufferCount = 1;
-  submit_info.pCommandBuffers = &command_buffer_;
+  submit_info.pCommandBuffers = &frame.command_buffer;
 
   // Submit command buffer to the queue and execute it.
   // |render_fence_| will now block until the graphic command finishes.
-  VK_CHECK(vkQueueSubmit(graphics_queue_, 1, &submit_info, render_fence_));
+  VK_CHECK(vkQueueSubmit(graphics_queue_, 1, &submit_info, frame.render_fence));
 
   // DISPLAY
 
@@ -729,7 +856,7 @@ void VulkanEngine::Draw() {
   present_info.pSwapchains = &swapchain_;
 
   present_info.waitSemaphoreCount = 1;
-  present_info.pWaitSemaphores = &render_semaphore_;
+  present_info.pWaitSemaphores = &frame.render_semaphore;
 
   present_info.pImageIndices = &swapchain_image_index;
 
