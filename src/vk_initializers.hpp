@@ -45,4 +45,12 @@ VkFenceCreateInfo FenceCreateInfo(VkFenceCreateFlags flags);
 
 VkSemaphoreCreateInfo SemaphoreCreateInfo();
 
+VkDescriptorSetLayoutBinding DescriptorSetLayoutBinding(
+    VkDescriptorType type, VkShaderStageFlags stage_flags, uint32_t binding);
+
+VkWriteDescriptorSet WriteDescriptorBuffer(VkDescriptorType type,
+                                           VkDescriptorSet descriptor_set,
+                                           VkDescriptorBufferInfo* buffer_info,
+                                           uint32_t binding);
+
 }  // namespace vkinit

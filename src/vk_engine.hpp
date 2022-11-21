@@ -58,6 +58,18 @@ class VulkanEngine {
     glm::mat4 view_projection;
   };
 
+  struct GpuSceneData {
+    // w is for exponent
+    glm::vec4 fog_color;
+    // x for min, y for max, zw unused.
+    glm::vec4 fog_distance;
+
+    glm::vec4 ambient_color;
+    // w is for sun power.
+    glm::vec4 sunlight_direction;
+    glm::vec4 sunlight_color;
+  };
+
   struct FrameData {
     // Semaphores used for GPU <-> GPU sync.
     VkSemaphore present_semaphore;
@@ -95,6 +107,8 @@ class VulkanEngine {
   VkDevice device_;
   VkSurfaceKHR surface_;
 
+  VkPhysicalDeviceProperties gpu_properties_;
+
   VkSwapchainKHR swapchain_;
   VkFormat swapchain_image_format_;
   std::vector<VkImage> swapchain_images_;
@@ -121,6 +135,9 @@ class VulkanEngine {
 
   VkDescriptorSetLayout global_set_layout_;
   VkDescriptorPool descriptor_pool_;
+
+  GpuSceneData scene_parameters_;
+  AllocatedBuffer scene_parameter_buffer_;
 
   DeletionQueue deletion_queue_;
 
@@ -152,4 +169,6 @@ class VulkanEngine {
   void DrawObjects(VkCommandBuffer cmd, RenderObject* first, int count);
 
   std::optional<VkShaderModule> LoadShaderModule(const std::string& path);
+
+  size_t PadUniformBufferSize(size_t original_size);
 };
