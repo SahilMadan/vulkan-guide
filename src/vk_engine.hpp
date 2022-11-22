@@ -70,6 +70,10 @@ class VulkanEngine {
     glm::vec4 sunlight_color;
   };
 
+  struct GpuObjectData {
+    glm::mat4 model_matrix;
+  };
+
   struct FrameData {
     // Semaphores used for GPU <-> GPU sync.
     VkSemaphore present_semaphore;
@@ -81,8 +85,10 @@ class VulkanEngine {
     VkCommandBuffer command_buffer;
 
     AllocatedBuffer camera_buffer;
-
     VkDescriptorSet global_descriptor;
+
+    AllocatedBuffer object_buffer;
+    VkDescriptorSet object_descriptor;
   };
 
   struct MeshPushConstants {
@@ -134,6 +140,7 @@ class VulkanEngine {
   std::unordered_map<std::string, Mesh> meshes_;
 
   VkDescriptorSetLayout global_set_layout_;
+  VkDescriptorSetLayout object_set_layout_;
   VkDescriptorPool descriptor_pool_;
 
   GpuSceneData scene_parameters_;
