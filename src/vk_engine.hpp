@@ -99,12 +99,19 @@ class VulkanEngine {
   struct Material {
     VkPipeline pipeline;
     VkPipelineLayout pipeline_layout;
+
+    VkDescriptorSet texture_set = VK_NULL_HANDLE;
   };
 
   struct RenderObject {
     Mesh* mesh;
     Material* material;
     glm::mat4 transform;
+  };
+
+  struct Texture {
+    AllocatedImage image;
+    VkImageView image_view;
   };
 
   struct UploadContext {
@@ -144,9 +151,11 @@ class VulkanEngine {
 
   std::unordered_map<std::string, Material> materials_;
   std::unordered_map<std::string, Mesh> meshes_;
+  std::unordered_map<std::string, Texture> textures_;
 
   VkDescriptorSetLayout global_set_layout_;
   VkDescriptorSetLayout object_set_layout_;
+  VkDescriptorSetLayout single_texture_set_layout_;
   VkDescriptorPool descriptor_pool_;
 
   GpuSceneData scene_parameters_;
@@ -167,8 +176,15 @@ class VulkanEngine {
   void InitPipelines();
   void InitScene();
 
+  void LoadTextures();
   void LoadMeshes();
+
+  void InitMonkeyScene();
+  void InitEmpireScene();
+
   void UploadMesh(Mesh& mesh);
+
+  bool LoadImageFromFile(std::string file, AllocatedImage& output);
 
   // Instantly execute commands on the GPU without dealing with the render loop
   // and other synchronization.

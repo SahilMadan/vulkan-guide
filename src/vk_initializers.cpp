@@ -283,4 +283,36 @@ VkSubmitInfo SubmitInfo(VkCommandBuffer* cmd, VkPipelineStageFlags* wait_stage,
   return info;
 }
 
+VkSamplerCreateInfo SamplerCreateInfo(
+    VkFilter filters, VkSamplerAddressMode sampler_address_mode) {
+  VkSamplerCreateInfo info = {};
+  info.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+  info.pNext = nullptr;
+
+  info.magFilter = filters;
+  info.minFilter = filters;
+  info.addressModeU = sampler_address_mode;
+  info.addressModeV = sampler_address_mode;
+  info.addressModeW = sampler_address_mode;
+
+  return info;
+}
+
+VkWriteDescriptorSet WriteDescriptorImage(VkDescriptorType type,
+                                          VkDescriptorSet destination_set,
+                                          VkDescriptorImageInfo* image_info,
+                                          uint32_t binding) {
+  VkWriteDescriptorSet write = {};
+  write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+  write.pNext = nullptr;
+
+  write.dstBinding = binding;
+  write.dstSet = destination_set;
+  write.descriptorCount = 1;
+  write.descriptorType = type;
+  write.pImageInfo = image_info;
+
+  return write;
+}
+
 }  // namespace vkinit

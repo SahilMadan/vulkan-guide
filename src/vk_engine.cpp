@@ -14,6 +14,9 @@
 #define VMA_IMPLEMENTATION
 #include <vk_mem_alloc.h>
 
+#define STB_IMAGE_IMPLEMENTATION
+#include <stb_image.h>
+
 namespace {
 
 constexpr uint32_t kSyncWaitTimeoutNs = 1'000'000'000;
@@ -50,6 +53,7 @@ void VulkanEngine::Init() {
   InitDescriptors();
   InitPipelines();
 
+  LoadTextures();
   LoadMeshes();
 
   InitScene();
@@ -374,11 +378,11 @@ void VulkanEngine::InitSyncStructs() {
 }
 
 void VulkanEngine::InitDescriptors() {
-  // Create a descriptor pool that will hold 10 uniform buffers.
   std::vector<VkDescriptorPoolSize> sizes = {
       {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 10},
       {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 10},
       {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 10},
+      {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 10},
   };
 
   VkDescriptorPoolCreateInfo descriptor_pool_create_info = {};
@@ -433,6 +437,23 @@ void VulkanEngine::InitDescriptors() {
 
   vkCreateDescriptorSetLayout(device_, &set_2_info, nullptr,
                               &object_set_layout_);
+
+  VkDescriptorSetLayoutBinding texture_buffer_binding =
+      vkinit::DescriptorSetLayoutBinding(
+          VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+          VK_SHADER_STAGE_FRAGMENT_BIT, 0);
+
+  VkDescriptorSetLayoutCreateInfo set_3_info = {};
+  set_3_info.sType = set_3_info.sType =
+      VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+  set_3_info.pNext = nullptr;
+
+  set_3_info.bindingCount = 1;
+  set_3_info.flags = 0;
+  set_3_info.pBindings = &texture_buffer_binding;
+
+  vkCreateDescriptorSetLayout(device_, &set_3_info, nullptr,
+                              &single_texture_set_layout_);
 
   const size_t scene_parameter_buffer_size =
       kVkFrameOverlap * PadUniformBufferSize(sizeof(GpuSceneData));
@@ -525,6 +546,7 @@ void VulkanEngine::InitDescriptors() {
   deletion_queue_.Push([&]() {
     vkDestroyDescriptorSetLayout(device_, global_set_layout_, nullptr);
     vkDestroyDescriptorSetLayout(device_, object_set_layout_, nullptr);
+    vkDestroyDescriptorSetLayout(device_, single_texture_set_layout_, nullptr);
     vkDestroyDescriptorPool(device_, descriptor_pool_, nullptr);
   });
 }
@@ -615,13 +637,57 @@ void VulkanEngine::InitPipelines() {
   VkPipeline mesh_pipeline;
   mesh_pipeline = builder.BuildPipeline(device_, renderpass_);
 
+  CreateMaterial(mesh_pipeline, mesh_pipeline_layout, "defaultmesh");
+
+  // Create a pipeline layout for the textured mesh, which has 3 descriptor
+  // sets.
+  VkPipelineLayoutCreateInfo texture_pipeline_layout_info =
+      mesh_pipeline_layout_info;
+
+  VkDescriptorSetLayout textured_set_layouts[] = {
+      global_set_layout_, object_set_layout_, single_texture_set_layout_};
+
+  texture_pipeline_layout_info.setLayoutCount = 3;
+  texture_pipeline_layout_info.pSetLayouts = textured_set_layouts;
+
+  VkPipelineLayout textured_pipe_layout = {};
+  VK_CHECK(vkCreatePipelineLayout(device_, &texture_pipeline_layout_info,
+                                  nullptr, &textured_pipe_layout));
+
+  auto textured_lit_frag_shader =
+      LoadShaderModule("../../shaders/textured_lit.frag.spv");
+  if (textured_lit_frag_shader.has_value()) {
+    std::cout << "Textured lit fragment shader successfully loaded.\n";
+  } else {
+    std::cerr << "Error when building textured lit fragment shader.\n";
+  }
+
+  builder.shader_stages.clear();
+  builder.shader_stages.push_back(vkinit::PipelineShaderStageCreateInfo(
+      VK_SHADER_STAGE_VERTEX_BIT, mesh_vert_shader.value()));
+  builder.shader_stages.push_back(vkinit::PipelineShaderStageCreateInfo(
+      VK_SHADER_STAGE_FRAGMENT_BIT, textured_lit_frag_shader.value()));
+
+  builder.pipeline_layout = textured_pipe_layout;
+
+  VkPipeline textured_mesh_pipeline =
+      builder.BuildPipeline(device_, renderpass_);
+
+  CreateMaterial(textured_mesh_pipeline, textured_pipe_layout, "texturedmesh");
+
   vkDestroyShaderModule(device_, mesh_vert_shader.value(), nullptr);
   vkDestroyShaderModule(device_, default_lit_frag_shader.value(), nullptr);
-
-  CreateMaterial(mesh_pipeline, mesh_pipeline_layout, "defaultmesh");
+  vkDestroyShaderModule(device_, textured_lit_frag_shader.value(), nullptr);
 
   deletion_queue_.Push([=]() {
     Material* material = GetMaterial("defaultmesh");
+    if (!material) {
+      return;
+    }
+    vkDestroyPipelineLayout(device_, material->pipeline_layout, nullptr);
+    vkDestroyPipeline(device_, material->pipeline, nullptr);
+
+    material = GetMaterial("texturedmesh");
     if (!material) {
       return;
     }
@@ -631,6 +697,11 @@ void VulkanEngine::InitPipelines() {
 }
 
 void VulkanEngine::InitScene() {
+  InitMonkeyScene();
+  InitEmpireScene();
+}
+
+void VulkanEngine::InitMonkeyScene() {
   RenderObject monkey;
   monkey.mesh = GetMesh("monkey");
   monkey.material = GetMaterial("defaultmesh");
@@ -651,6 +722,65 @@ void VulkanEngine::InitScene() {
       renderables_.push_back(triangle);
     }
   }
+}
+
+void VulkanEngine::InitEmpireScene() {
+  // Create a sampler for the texture.
+  VkSamplerCreateInfo sampler_info =
+      vkinit::SamplerCreateInfo(VK_FILTER_NEAREST);
+
+  VkSampler blocky_sampler;
+  vkCreateSampler(device_, &sampler_info, nullptr, &blocky_sampler);
+  deletion_queue_.Push(
+      [=]() { vkDestroySampler(device_, blocky_sampler, nullptr); });
+
+  Material* textured_material = GetMaterial("texturedmesh");
+
+  // Allocate the descriptor set for single-texture to use on the material.
+  VkDescriptorSetAllocateInfo allocate_info = {};
+  allocate_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+  allocate_info.pNext = nullptr;
+
+  allocate_info.descriptorPool = descriptor_pool_;
+  allocate_info.descriptorSetCount = 1;
+  allocate_info.pSetLayouts = &single_texture_set_layout_;
+
+  vkAllocateDescriptorSets(device_, &allocate_info,
+                           &textured_material->texture_set);
+
+  VkDescriptorImageInfo image_buffer_info = {};
+  image_buffer_info.sampler = blocky_sampler;
+  image_buffer_info.imageView = textures_["empire_diffuse"].image_view;
+  image_buffer_info.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+  VkWriteDescriptorSet texture1 = vkinit::WriteDescriptorImage(
+      VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, textured_material->texture_set,
+      &image_buffer_info, 0);
+
+  vkUpdateDescriptorSets(device_, 1, &texture1, 0, nullptr);
+
+  RenderObject map;
+  map.mesh = GetMesh("empire");
+  map.material = GetMaterial("texturedmesh");
+  map.transform = glm::translate(glm::mat4(1), glm::vec3(5, -10, 0));
+
+  renderables_.push_back(map);
+}
+
+void VulkanEngine::LoadTextures() {
+  Texture lost_empire;
+  LoadImageFromFile("../../assets/lost_empire-RGBA.png", lost_empire.image);
+
+  VkImageViewCreateInfo image_info = vkinit::ImageViewCreateInfo(
+      VK_FORMAT_R8G8B8A8_SRGB, lost_empire.image.image,
+      VK_IMAGE_ASPECT_COLOR_BIT);
+
+  vkCreateImageView(device_, &image_info, nullptr, &lost_empire.image_view);
+
+  deletion_queue_.Push(
+      [=]() { vkDestroyImageView(device_, lost_empire.image_view, nullptr); });
+
+  textures_["empire_diffuse"] = lost_empire;
 }
 
 std::optional<VkShaderModule> VulkanEngine::LoadShaderModule(
@@ -715,6 +845,11 @@ void VulkanEngine::LoadMeshes() {
   UploadMesh(monkey_mesh);
 
   meshes_["monkey"] = monkey_mesh;
+
+  Mesh lost_empire;
+  lost_empire.LoadFromObj("../../assets/lost_empire.obj");
+  UploadMesh(lost_empire);
+  meshes_["empire"] = lost_empire;
 }
 
 void VulkanEngine::UploadMesh(Mesh& mesh) {
@@ -753,6 +888,144 @@ void VulkanEngine::UploadMesh(Mesh& mesh) {
   // destroy the staging buffer.
   vmaDestroyBuffer(allocator_, staging_buffer.buffer,
                    staging_buffer.allocation);
+}
+
+bool VulkanEngine::LoadImageFromFile(std::string filename,
+                                     AllocatedImage& output) {
+  int texture_width;
+  int texture_height;
+  int texture_channels;
+
+  stbi_uc* pixels = stbi_load(filename.c_str(), &texture_width, &texture_height,
+                              &texture_channels, STBI_rgb_alpha);
+
+  if (!pixels) {
+    return false;
+  }
+
+  // 4 bytes per pixel (R8G8B8A8).
+  VkDeviceSize image_size = texture_width * texture_height * 4;
+
+  // The format R8G8B8A8 matches with the pixels loaded from stb_image.
+  VkFormat image_format = VK_FORMAT_R8G8B8A8_SRGB;
+
+  AllocatedBuffer staging_buffer = CreateBuffer(
+      image_size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VMA_MEMORY_USAGE_CPU_ONLY);
+
+  deletion_queue_.Push([=]() {
+    vmaDestroyBuffer(allocator_, staging_buffer.buffer,
+                     staging_buffer.allocation);
+  });
+
+  void* data;
+  vmaMapMemory(allocator_, staging_buffer.allocation, &data);
+
+  void* pixel_ptr = pixels;
+  memcpy(data, pixel_ptr, static_cast<size_t>(image_size));
+
+  vmaUnmapMemory(allocator_, staging_buffer.allocation);
+
+  stbi_image_free(pixels);
+
+  VkExtent3D image_extent;
+  image_extent.width = static_cast<uint32_t>(texture_width);
+  image_extent.height = static_cast<uint32_t>(texture_height);
+  image_extent.depth = 1;
+
+  VkImageCreateInfo image_info = vkinit::ImageCreateInfo(
+      image_format,
+      VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+      image_extent);
+
+  AllocatedImage image;
+
+  VmaAllocationCreateInfo image_allocation_info = {};
+  image_allocation_info.usage = VMA_MEMORY_USAGE_GPU_ONLY;
+
+  // Allocate and create the image.
+  vmaCreateImage(allocator_, &image_info, &image_allocation_info, &image.image,
+                 &image.allocation, nullptr);
+
+  ImmediateSubmit([&](VkCommandBuffer cmd) {
+    // Note: We can't just copy the data from the buffer into the image
+    // directly. The image is not initialized in any specific layout, so we need
+    // to do a layout transition to put it in linear layout which is the best
+    // layout for copying data from a buffer to a texture.
+
+    // What part of the image we will transform (all of it).
+    VkImageSubresourceRange range;
+    range.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    range.baseMipLevel = 0;
+    range.levelCount = 1;
+    range.baseArrayLayer = 0;
+    range.layerCount = 1;
+
+    VkImageMemoryBarrier image_barrier_to_transfer = {};
+    image_barrier_to_transfer.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    image_barrier_to_transfer.pNext = nullptr;
+
+    image_barrier_to_transfer.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    image_barrier_to_transfer.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+
+    image_barrier_to_transfer.image = image.image;
+    image_barrier_to_transfer.subresourceRange = range;
+
+    image_barrier_to_transfer.srcAccessMask = 0;
+    image_barrier_to_transfer.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+
+    // Barrier the image into the transfer-receive layout.
+    // Specify the source pipeline stage (TOP_OF_PIPE) and destination pipeline
+    // stage (TRANSFER). See:
+    // https://gpuopen.com/learn/vulkan-barriers-explained/
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                         VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0,
+                         nullptr, 1, &image_barrier_to_transfer);
+
+    VkBufferImageCopy copy_region = {};
+    copy_region.bufferOffset = 0;
+    copy_region.bufferRowLength = 0;
+    copy_region.bufferImageHeight = 0;
+
+    copy_region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    copy_region.imageSubresource.mipLevel = 0;
+    copy_region.imageSubresource.baseArrayLayer = 0;
+    copy_region.imageSubresource.layerCount = 1;
+    copy_region.imageExtent = image_extent;
+
+    // Copy the buffer into the image.
+    vkCmdCopyBufferToImage(cmd, staging_buffer.buffer, image.image,
+                           VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1,
+                           &copy_region);
+
+    // The image now has the correct pixel data, so we can change its layout one
+    // more time to make it into a shader readable layout.
+    VkImageMemoryBarrier image_barrier_to_readable = {};
+    image_barrier_to_readable.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    image_barrier_to_readable.pNext = nullptr;
+
+    image_barrier_to_readable.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    image_barrier_to_readable.newLayout =
+        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+    image_barrier_to_readable.image = image.image;
+    image_barrier_to_readable.subresourceRange = range;
+
+    image_barrier_to_readable.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    image_barrier_to_readable.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr,
+                         0, nullptr, 1, &image_barrier_to_readable);
+  });
+
+  deletion_queue_.Push(
+      [=]() { vmaDestroyImage(allocator_, image.image, image.allocation); });
+
+  output = image;
+
+  std::cout << "Texture Loaded: " << filename << std::endl;
+
+  return true;
 }
 
 void VulkanEngine::ImmediateSubmit(
@@ -912,6 +1185,13 @@ void VulkanEngine::DrawObjects(VkCommandBuffer cmd, RenderObject* first,
       vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                               object.material->pipeline_layout, 1, 1,
                               &frame.object_descriptor, 0, nullptr);
+
+      // Bind the texture descriptor.
+      if (object.material->texture_set) {
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                object.material->pipeline_layout, 2, 1,
+                                &object.material->texture_set, 0, nullptr);
+      }
     }
 
     glm::mat4 mvp = projection * view * object.transform;

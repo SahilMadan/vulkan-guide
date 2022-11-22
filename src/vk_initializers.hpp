@@ -61,4 +61,13 @@ VkSubmitInfo SubmitInfo(VkCommandBuffer* cmd,
                         VkSemaphore* wait_semaphore = nullptr,
                         VkSemaphore* signal_semaphore = nullptr);
 
+VkSamplerCreateInfo SamplerCreateInfo(
+    VkFilter filter,
+    VkSamplerAddressMode sampler_address_mode = VK_SAMPLER_ADDRESS_MODE_REPEAT);
+
+VkWriteDescriptorSet WriteDescriptorImage(VkDescriptorType type,
+                                          VkDescriptorSet destination_set,
+                                          VkDescriptorImageInfo* image_info,
+                                          uint32_t binding);
+
 }  // namespace vkinit
