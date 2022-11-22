@@ -41,7 +41,7 @@ VkImageViewCreateInfo ImageViewCreateInfo(VkFormat format, VkImage image,
 VkPipelineDepthStencilStateCreateInfo DepthStencilCreateInfo(
     bool depth_test, bool depth_write, VkCompareOp compare_op);
 
-VkFenceCreateInfo FenceCreateInfo(VkFenceCreateFlags flags);
+VkFenceCreateInfo FenceCreateInfo(VkFenceCreateFlags flags = 0);
 
 VkSemaphoreCreateInfo SemaphoreCreateInfo();
 
@@ -52,5 +52,13 @@ VkWriteDescriptorSet WriteDescriptorBuffer(VkDescriptorType type,
                                            VkDescriptorSet descriptor_set,
                                            VkDescriptorBufferInfo* buffer_info,
                                            uint32_t binding);
+
+VkCommandBufferBeginInfo CommandBufferBeginInfo(
+    VkCommandBufferUsageFlags usage_flags);
+
+VkSubmitInfo SubmitInfo(VkCommandBuffer* cmd,
+                        VkPipelineStageFlags* wait_stage = nullptr,
+                        VkSemaphore* wait_semaphore = nullptr,
+                        VkSemaphore* signal_semaphore = nullptr);
 
 }  // namespace vkinit

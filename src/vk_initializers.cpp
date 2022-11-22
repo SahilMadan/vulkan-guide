@@ -250,4 +250,37 @@ VkWriteDescriptorSet WriteDescriptorBuffer(
   return write;
 }
 
+VkCommandBufferBeginInfo CommandBufferBeginInfo(
+    VkCommandBufferUsageFlags usage_flags) {
+  VkCommandBufferBeginInfo info = {};
+  info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+  info.pNext = nullptr;
+
+  info.pInheritanceInfo = nullptr;
+  info.flags = usage_flags;
+
+  return info;
+}
+
+VkSubmitInfo SubmitInfo(VkCommandBuffer* cmd, VkPipelineStageFlags* wait_stage,
+                        VkSemaphore* wait_semaphore,
+                        VkSemaphore* signal_semaphore) {
+  VkSubmitInfo info = {};
+  info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+  info.pNext = nullptr;
+
+  info.pWaitDstStageMask = wait_stage;
+
+  info.waitSemaphoreCount = wait_semaphore ? 1 : 0;
+  info.pWaitSemaphores = wait_semaphore;
+
+  info.signalSemaphoreCount = signal_semaphore ? 1 : 0;
+  info.pSignalSemaphores = signal_semaphore;
+
+  info.commandBufferCount = 1;
+  info.pCommandBuffers = cmd;
+
+  return info;
+}
+
 }  // namespace vkinit

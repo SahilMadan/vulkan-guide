@@ -16,7 +16,8 @@
 
 namespace {
 
-constexpr uint32_t kSyncWaitTimeoutNs = 1000000000;
+constexpr uint32_t kSyncWaitTimeoutNs = 1'000'000'000;
+constexpr uint32_t kUploadSyncWaitTimeoutNs = 9'999'999'999;
 
 // Immediately abort on error.
 #define VK_CHECK(x)                                               \
@@ -192,6 +193,22 @@ void VulkanEngine::InitCommands() {
     VK_CHECK(vkAllocateCommandBuffers(device_, &command_buffer_allocate_info,
                                       &frames_[i].command_buffer));
   }
+
+  VkCommandPoolCreateInfo upload_command_pool =
+      vkinit::CommandPoolCreateInfo(graphics_queue_family_);
+
+  VK_CHECK(vkCreateCommandPool(device_, &upload_command_pool, nullptr,
+                               &upload_context_.command_pool));
+  deletion_queue_.Push([=]() {
+    vkDestroyCommandPool(device_, upload_context_.command_pool, nullptr);
+  });
+
+  // Alloate the default command buffer that we will use for instant commands.
+  VkCommandBufferAllocateInfo upload_buffer_allocate_info =
+      vkinit::CommandBufferAllocateInfo(upload_context_.command_pool, 1);
+
+  VK_CHECK(vkAllocateCommandBuffers(device_, &upload_buffer_allocate_info,
+                                    &upload_context_.command_buffer));
 }
 
 void VulkanEngine::InitDefaultRenderpass() {
@@ -346,6 +363,14 @@ void VulkanEngine::InitSyncStructs() {
       vkDestroySemaphore(device_, frames_[i].render_semaphore, nullptr);
     });
   }
+
+  VkFenceCreateInfo upload_fence_info = vkinit::FenceCreateInfo();
+  VK_CHECK(vkCreateFence(device_, &upload_fence_info, nullptr,
+                         &upload_context_.upload_fence));
+
+  deletion_queue_.Push([=]() {
+    vkDestroyFence(device_, upload_context_.upload_fence, nullptr);
+  });
 }
 
 void VulkanEngine::InitDescriptors() {
@@ -693,19 +718,73 @@ void VulkanEngine::LoadMeshes() {
 }
 
 void VulkanEngine::UploadMesh(Mesh& mesh) {
-  mesh.buffer = CreateBuffer(mesh.vertices.size() * sizeof(Vertex),
-                             VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
-                             VMA_MEMORY_USAGE_CPU_TO_GPU);
+  const size_t buffer_size = mesh.vertices.size() * sizeof(Vertex);
+
+  // Allocate the staging buffer. This is only used to transfer to memory which
+  // can then be copied to GPU-only memory.
+  AllocatedBuffer staging_buffer = CreateBuffer(
+      buffer_size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VMA_MEMORY_USAGE_CPU_ONLY);
+
+  // Copy vertex data.
+  void* data;
+  vmaMapMemory(allocator_, staging_buffer.allocation, &data);
+  memcpy(data, mesh.vertices.data(), mesh.vertices.size() * sizeof(Vertex));
+  vmaUnmapMemory(allocator_, staging_buffer.allocation);
+
+  // Allocate the vertex buffer.
+  mesh.buffer = CreateBuffer(
+      buffer_size,
+      VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+      VMA_MEMORY_USAGE_GPU_ONLY);
+
+  ImmediateSubmit([=](VkCommandBuffer cmd) {
+    VkBufferCopy copy;
+    copy.dstOffset = 0;
+    copy.srcOffset = 0;
+    copy.size = buffer_size;
+    vkCmdCopyBuffer(cmd, staging_buffer.buffer, mesh.buffer.buffer, 1, &copy);
+  });
 
   deletion_queue_.Push([=]() {
     vmaDestroyBuffer(allocator_, mesh.buffer.buffer, mesh.buffer.allocation);
   });
 
-  // Copy vertex data.
-  void* data;
-  vmaMapMemory(allocator_, mesh.buffer.allocation, &data);
-  memcpy(data, mesh.vertices.data(), mesh.vertices.size() * sizeof(Vertex));
-  vmaUnmapMemory(allocator_, mesh.buffer.allocation);
+  // Since we submitted the command immediately, we don't need to wait to
+  // destroy the staging buffer.
+  vmaDestroyBuffer(allocator_, staging_buffer.buffer,
+                   staging_buffer.allocation);
+}
+
+void VulkanEngine::ImmediateSubmit(
+    std::function<void(VkCommandBuffer cmd)>&& function) {
+  VkCommandBuffer& cmd = upload_context_.command_buffer;
+
+  // Begin command buffer recording. We will use this command buffer exactly
+  // once before resetting, so we tell Vulkan that.
+  VkCommandBufferBeginInfo command_begin_info = vkinit::CommandBufferBeginInfo(
+      VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT);
+
+  VK_CHECK(vkBeginCommandBuffer(cmd, &command_begin_info));
+
+  // Execute the function.
+  function(cmd);
+
+  VK_CHECK(vkEndCommandBuffer(cmd));
+
+  VkSubmitInfo submit = vkinit::SubmitInfo(&cmd);
+
+  // Submit the command buffer to the queue and execute it.
+  // |upload_context_.upload_fence| will now block until the graphic commands
+  // finish execution.
+  VK_CHECK(
+      vkQueueSubmit(graphics_queue_, 1, &submit, upload_context_.upload_fence));
+
+  vkWaitForFences(device_, 1, &upload_context_.upload_fence, true,
+                  kUploadSyncWaitTimeoutNs);
+  vkResetFences(device_, 1, &upload_context_.upload_fence);
+
+  // Reset the command buffers inside the command pool.
+  vkResetCommandPool(device_, upload_context_.command_pool, 0);
 }
 
 AllocatedBuffer VulkanEngine::CreateBuffer(size_t allocation_size,
@@ -908,12 +987,8 @@ void VulkanEngine::Draw() {
 
   // Begin command buffer recording. We will use this command buffer exactly
   // once, so we want to let Vulkan know that.
-  VkCommandBufferBeginInfo command_begin_info = {};
-  command_begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-  command_begin_info.pNext = nullptr;
-
-  command_begin_info.pInheritanceInfo = nullptr;
-  command_begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+  VkCommandBufferBeginInfo command_begin_info = vkinit::CommandBufferBeginInfo(
+      VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT);
 
   VK_CHECK(vkBeginCommandBuffer(frame.command_buffer, &command_begin_info));
 
@@ -954,12 +1029,13 @@ void VulkanEngine::Draw() {
   // We want to wait on the |present_semaphore_|, as that semaphore is signaled
   // when the swapchain is ready. We will use the |render_semaphore_| when
   // rendering has finish.
-  VkSubmitInfo submit_info = {};
-  submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-  submit_info.pNext = nullptr;
-
   VkPipelineStageFlags wait_stage =
       VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+  VkSubmitInfo submit_info =
+      vkinit::SubmitInfo(&frame.command_buffer, &wait_stage,
+                         &frame.present_semaphore, &frame.render_semaphore);
+  submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+  submit_info.pNext = nullptr;
 
   submit_info.pWaitDstStageMask = &wait_stage;
 

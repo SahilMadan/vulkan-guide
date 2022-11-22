@@ -107,6 +107,12 @@ class VulkanEngine {
     glm::mat4 transform;
   };
 
+  struct UploadContext {
+    VkFence upload_fence;
+    VkCommandPool command_pool;
+    VkCommandBuffer command_buffer;
+  };
+
   VkInstance instance_;
   VkDebugUtilsMessengerEXT debug_messenger_;
   VkPhysicalDevice gpu_;
@@ -146,6 +152,8 @@ class VulkanEngine {
   GpuSceneData scene_parameters_;
   AllocatedBuffer scene_parameter_buffer_;
 
+  UploadContext upload_context_;
+
   DeletionQueue deletion_queue_;
 
   // Initialization Helpers.
@@ -161,6 +169,10 @@ class VulkanEngine {
 
   void LoadMeshes();
   void UploadMesh(Mesh& mesh);
+
+  // Instantly execute commands on the GPU without dealing with the render loop
+  // and other synchronization.
+  void ImmediateSubmit(std::function<void(VkCommandBuffer cmd)>&& function);
 
   AllocatedBuffer CreateBuffer(size_t allocation_size,
                                VkBufferUsageFlags usage_flags,
